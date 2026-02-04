@@ -7,6 +7,8 @@
 // @match        https://www.wanyiwan.top/*
 // @grant        none
 // @run-at       document-end
+// @updateURL    https://raw.githubusercontent.com/xieyankun123/tampermonkey/master/scripts/xjjd-auto-click-recorder.user.js
+// @downloadURL  https://raw.githubusercontent.com/xieyankun123/tampermonkey/master/scripts/xjjd-auto-click-recorder.user.js
 // ==/UserScript==
 
 (function() {
