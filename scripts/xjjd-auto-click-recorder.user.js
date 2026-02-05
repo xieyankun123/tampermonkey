@@ -597,6 +597,10 @@
                     🗑️ 清除
                 </button>
 
+                <button id="export-fixed-points" style="width: 100%; padding: 10px; margin: 6px 0; background: #009688; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px;">
+                    📤 导出固定点位（复制到剪贴板）
+                </button>
+
                 <div id="status" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid #555; font-size: 13px; color: #aaa;">
                     就绪
                 </div>
@@ -724,6 +728,22 @@
 
                 updateStatus('✓ 已清除');
                 console.warn(`已清除 ${count} 个点击的录制数据`);
+            }
+        };
+
+        // 导出固定点位（百分比坐标，供「固定点位循环点击器」使用）
+        document.getElementById('export-fixed-points').onclick = async () => {
+            if (recordedClicks.length === 0) {
+                updateStatus('没有录制数据可导出');
+                return;
+            }
+            try {
+                const json = JSON.stringify(recordedClicks);
+                await navigator.clipboard.writeText(json);
+                updateStatus('已复制到剪贴板，可在「固定点位循环点击器」中粘贴导入');
+                console.warn('导出固定点位:', recordedClicks.length, '个');
+            } catch (e) {
+                updateStatus('复制失败: ' + e.message);
             }
         };
 
