@@ -72,6 +72,102 @@
         ta.remove();
         return Promise.resolve(ok);
     }
+
+    /** 当 window.prompt 不可用时，用页面内弹窗让用户输入（返回 Promise<string|null>） */
+    function getInputFromUser(message, defaultValue) {
+        if (typeof window.prompt === 'function') {
+            try {
+                const v = window.prompt(message, defaultValue || '');
+                return Promise.resolve(v != null ? v : null);
+            } catch (e) {}
+        }
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;';
+            const box = document.createElement('div');
+            box.style.cssText = 'background:#333;color:#fff;padding:20px;border-radius:8px;max-width:100%;width:400px;max-height:80vh;display:flex;flex-direction:column;';
+            box.innerHTML = `<div style="margin-bottom:10px;font-size:14px;">${message.replace(/</g, '&lt;')}</div>`;
+            const ta = document.createElement('textarea');
+            ta.value = defaultValue || '';
+            ta.placeholder = '请粘贴 JSON，或点下方「粘贴」从剪贴板读取';
+            ta.style.cssText = 'width:100%;height:120px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;';
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
+            const btnOk = document.createElement('button');
+            btnOk.textContent = '确定';
+            btnOk.style.cssText = 'padding:8px 16px;background:#009688;color:#fff;border:none;border-radius:4px;cursor:pointer;min-height:36px;';
+            const btnCancel = document.createElement('button');
+            btnCancel.textContent = '取消';
+            btnCancel.style.cssText = 'padding:8px 16px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer;min-height:36px;';
+            const btnPaste = document.createElement('button');
+            btnPaste.textContent = '从剪贴板粘贴';
+            btnPaste.style.cssText = 'padding:8px 16px;background:#607D8B;color:#fff;border:none;border-radius:4px;cursor:pointer;min-height:36px;';
+            btnPaste.onclick = async () => {
+                if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                    try {
+                        const t = await navigator.clipboard.readText();
+                        if (t) ta.value = ta.value ? ta.value + '\n' + t : t;
+                    } catch (e) {}
+                }
+            };
+            function close(result) {
+                overlay.remove();
+                resolve(result);
+            }
+            btnOk.onclick = () => close(ta.value.trim() || null);
+            btnCancel.onclick = () => close(null);
+            row.appendChild(btnCancel);
+            row.appendChild(btnPaste);
+            row.appendChild(btnOk);
+            box.appendChild(ta);
+            box.appendChild(row);
+            overlay.appendChild(box);
+            overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+            document.body.appendChild(overlay);
+            ta.focus();
+        });
+    }
+
+    /** 当 window.prompt 不可用时，用页面内弹窗显示文本供用户复制 */
+    function showTextForCopy(title, text) {
+        if (typeof window.prompt === 'function') {
+            try {
+                window.prompt(title, text);
+                return;
+            } catch (e) {}
+        }
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#333;color:#fff;padding:20px;border-radius:8px;max-width:100%;width:400px;max-height:80vh;display:flex;flex-direction:column;';
+        box.innerHTML = `<div style="margin-bottom:10px;font-size:14px;">${title.replace(/</g, '&lt;')}</div>`;
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.readOnly = true;
+        ta.style.cssText = 'width:100%;height:200px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;';
+        const btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
+        const btnCopy = document.createElement('button');
+        btnCopy.textContent = '再试一次复制';
+        btnCopy.style.cssText = 'padding:8px 16px;background:#607D8B;color:#fff;border:none;border-radius:4px;cursor:pointer;min-height:36px;';
+        btnCopy.onclick = async () => {
+            const ok = await copyToClipboard(ta.value);
+            if (ok) btnCopy.textContent = '已复制';
+        };
+        const btn = document.createElement('button');
+        btn.textContent = '关闭';
+        btn.style.cssText = 'padding:8px 16px;background:#009688;color:#fff;border:none;border-radius:4px;cursor:pointer;min-height:36px;';
+        btn.onclick = () => overlay.remove();
+        btnRow.appendChild(btnCopy);
+        btnRow.appendChild(btn);
+        box.appendChild(ta);
+        box.appendChild(btnRow);
+        overlay.appendChild(box);
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+        document.body.appendChild(overlay);
+        ta.select();
+    }
+
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -809,7 +905,7 @@
                 console.warn('导出固定点位:', recordedClicks.length, '个');
             } else {
                 updateStatus('复制失败，请手动复制。内容已弹窗显示');
-                prompt('请手动复制以下内容（Ctrl+C）:', json);
+                showTextForCopy('请手动复制以下内容（Ctrl+C）：', json);
             }
         };
 
@@ -822,7 +918,7 @@
                 } catch (e) {}
             }
             if (!text || !text.trim()) {
-                text = prompt('请粘贴导出的固定点位 JSON（与导出格式一致）：', '');
+                text = await getInputFromUser('请粘贴导出的固定点位 JSON（与导出格式一致）：', '');
             }
             if (!text || !text.trim()) {
                 updateStatus('已取消导入');
