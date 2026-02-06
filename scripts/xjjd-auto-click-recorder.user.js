@@ -53,6 +53,25 @@
         }
         return { clientX: e.clientX, clientY: e.clientY };
     }
+
+    /** 复制到剪贴板（兼容无 clipboard API 的环境，如 iframe、手机、非 HTTPS） */
+    function copyToClipboard(text) {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+        }
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        let ok = false;
+        try {
+            ok = document.execCommand('copy');
+        } catch (e) {}
+        ta.remove();
+        return Promise.resolve(ok);
+    }
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -778,13 +797,14 @@
                 updateStatus('没有录制数据可导出');
                 return;
             }
-            try {
-                const json = JSON.stringify(recordedClicks);
-                await navigator.clipboard.writeText(json);
+            const json = JSON.stringify(recordedClicks);
+            const ok = await copyToClipboard(json);
+            if (ok) {
                 updateStatus('已复制到剪贴板，可在「固定点位循环点击器」中粘贴导入');
                 console.warn('导出固定点位:', recordedClicks.length, '个');
-            } catch (e) {
-                updateStatus('复制失败: ' + e.message);
+            } else {
+                updateStatus('复制失败，请手动复制。内容已弹窗显示');
+                prompt('请手动复制以下内容（Ctrl+C）:', json);
             }
         };
 
