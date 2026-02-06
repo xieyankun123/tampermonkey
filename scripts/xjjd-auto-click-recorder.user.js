@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         极简自动点击录制器
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  录制点击，自动重复
+// @version      1.1
+// @description  录制点击，自动重复（支持手机触摸录制）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
 // @grant        none
@@ -35,8 +35,24 @@
     let isEditMode = false;
     let isShowingMarkers = false;
     let markersOverlay = null;
+    // 触摸/点击去重：同一 tap 可能先 touchend 再 click，只记录一次
+    let lastRecordedTime = 0;
+    let lastRecordedClientX = -9999;
+    let lastRecordedClientY = -9999;
+    const RECORD_DEDUPE_MS = 400;
+    const RECORD_DEDUPE_PX = 30;
 
     // ========== 工具函数 ==========
+    /** 从鼠标或触摸事件中取 clientX/clientY（兼容桌面与手机） */
+    function getEventClientXY(e) {
+        if (e.touches && e.touches.length > 0) {
+            return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+        }
+        if (e.changedTouches && e.changedTouches.length > 0) {
+            return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+        }
+        return { clientX: e.clientX, clientY: e.clientY };
+    }
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -171,6 +187,7 @@
         isRecording = true;
         updateStatus(append ? `补充录制中...` : `录制中...`);
         canvas.addEventListener('click', recordHandler);
+        canvas.addEventListener('touchend', recordHandlerTouch, { passive: true });
 
         // 隐藏保存指示器（新的录制）
         if (!append) {
@@ -182,6 +199,7 @@
     function stopRecord() {
         isRecording = false;
         canvas.removeEventListener('click', recordHandler);
+        canvas.removeEventListener('touchend', recordHandlerTouch, { passive: true });
         updateStatus(`录制完成: ${recordedClicks.length}个点击`);
         console.warn('录制的点击:', recordedClicks);
 
@@ -201,10 +219,21 @@
         }
     }
 
-    function recordHandler(e) {
+    /** 从 client 坐标录制一个点（供 click / touchend 共用，含去重） */
+    function recordClickAt(clientX, clientY) {
         const rect = canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+
+        // 同一 tap 可能先 touchend 再 click，短时间内同位置只记一次
+        const now = Date.now();
+        const distFromLast = Math.sqrt(Math.pow(clientX - lastRecordedClientX, 2) + Math.pow(clientY - lastRecordedClientY, 2));
+        if (now - lastRecordedTime < RECORD_DEDUPE_MS && distFromLast < RECORD_DEDUPE_PX) {
+            return;
+        }
+        lastRecordedTime = now;
+        lastRecordedClientX = clientX;
+        lastRecordedClientY = clientY;
 
         // 检查是否和所有已录制的点太接近（去重）
         for (let i = 0; i < recordedClicks.length; i++) {
@@ -242,6 +271,18 @@
         if (isShowingMarkers) {
             showMarkers(false);
         }
+    }
+
+    function recordHandler(e) {
+        const { clientX, clientY } = getEventClientXY(e);
+        recordClickAt(clientX, clientY);
+    }
+
+    /** 手机触摸结束时录制（触摸屏上 click 可能不触发或延迟） */
+    function recordHandlerTouch(e) {
+        if (!e.changedTouches || e.changedTouches.length === 0) return;
+        const { clientX, clientY } = getEventClientXY(e);
+        recordClickAt(clientX, clientY);
     }
 
     function showClickMarker(x, y) {
@@ -764,23 +805,44 @@
         let isDragging = false;
         let startX, startY;
 
-        header.onmousedown = (e) => {
-            if (e.target.tagName === 'BUTTON') return;
+        function startDrag(clientX, clientY) {
+            if (isDragging) return;
             isDragging = true;
-            startX = e.clientX - panel.offsetLeft;
-            startY = e.clientY - panel.offsetTop;
-        };
-
-        document.onmousemove = (e) => {
+            startX = clientX - panel.offsetLeft;
+            startY = clientY - panel.offsetTop;
+        }
+        function moveDrag(clientX, clientY) {
             if (!isDragging) return;
-            const x = Math.max(0, Math.min(e.clientX - startX, window.innerWidth - panel.offsetWidth));
-            const y = Math.max(0, Math.min(e.clientY - startY, window.innerHeight - panel.offsetHeight));
+            const x = Math.max(0, Math.min(clientX - startX, window.innerWidth - panel.offsetWidth));
+            const y = Math.max(0, Math.min(clientY - startY, window.innerHeight - panel.offsetHeight));
             panel.style.left = x + 'px';
             panel.style.top = y + 'px';
             panel.style.right = 'auto';
-        };
+        }
+        function endDrag() {
+            isDragging = false;
+        }
 
-        document.onmouseup = () => isDragging = false;
+        header.onmousedown = (e) => {
+            if (e.target.tagName === 'BUTTON') return;
+            startDrag(e.clientX, e.clientY);
+        };
+        document.onmousemove = (e) => moveDrag(e.clientX, e.clientY);
+        document.onmouseup = () => endDrag();
+
+        // 手机触摸拖拽
+        header.addEventListener('touchstart', (e) => {
+            if (e.target.tagName === 'BUTTON') return;
+            e.preventDefault();
+            const { clientX, clientY } = getEventClientXY(e);
+            startDrag(clientX, clientY);
+        }, { passive: false });
+        document.addEventListener('touchmove', (e) => {
+            if (!isDragging || !e.touches.length) return;
+            const { clientX, clientY } = getEventClientXY(e);
+            moveDrag(clientX, clientY);
+        }, { passive: true });
+        document.addEventListener('touchend', () => endDrag(), { passive: true });
     }
 
     function createShowButton() {
