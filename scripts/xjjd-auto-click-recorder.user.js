@@ -728,10 +728,6 @@
                     ⏹️ 停止录制
                 </button>
 
-                <button id="play-once" style="width: 100%; padding: 12px; margin: 6px 0; background: #2196F3; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 15px;">
-                    ▶️ 回放
-                </button>
-
                 <button id="play-loop" style="width: 100%; padding: 12px; margin: 6px 0; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 15px; font-weight: bold;">
                     🔄 循环
                 </button>
@@ -804,26 +800,8 @@
             document.getElementById('click-count').textContent = recordedClicks.length;
         };
 
-        // 回放按钮
-        document.getElementById('play-once').onclick = async () => {
-            isPlaying = true;
-            await playOnce();
-            isPlaying = false;
-
-            // 回放完成后，如果有录制数据，确保显示点位
-            if (recordedClicks.length > 0 && !isShowingMarkers) {
-                isShowingMarkers = true;
-                document.getElementById('show-markers').style.background = '#009688';
-                document.getElementById('show-markers').textContent = '👁️ 隐藏';
-                showMarkers(false);
-            }
-
-            updateStatus(isShowingMarkers ? '显示点位中' : '回放完成');
-        };
-
         document.getElementById('play-loop').onclick = () => {
             document.getElementById('play-loop').style.display = 'none';
-            document.getElementById('play-once').style.display = 'none';
             document.getElementById('stop-play').style.display = 'block';
             playLoop();
         };
@@ -831,7 +809,6 @@
         document.getElementById('stop-play').onclick = () => {
             stopPlay();
             document.getElementById('play-loop').style.display = 'block';
-            document.getElementById('play-once').style.display = 'block';
             document.getElementById('stop-play').style.display = 'none';
         };
 
