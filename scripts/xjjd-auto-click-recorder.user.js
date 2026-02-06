@@ -90,7 +90,7 @@
             const ta = document.createElement('textarea');
             ta.value = defaultValue || '';
             ta.placeholder = '请粘贴 JSON，或点下方「粘贴」从剪贴板读取';
-            ta.style.cssText = 'width:100%;height:120px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;';
+            ta.style.cssText = 'width:100%;height:120px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;background:#fff;color:#111;border:1px solid #666;';
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
             const btnOk = document.createElement('button');
@@ -144,7 +144,7 @@
         const ta = document.createElement('textarea');
         ta.value = text;
         ta.readOnly = true;
-        ta.style.cssText = 'width:100%;height:200px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;';
+        ta.style.cssText = 'width:100%;height:200px;resize:vertical;padding:8px;box-sizing:border-box;margin-bottom:12px;font-family:monospace;font-size:12px;-webkit-user-select:text;user-select:text;background:#fff;color:#111;border:1px solid #666;';
         const btnRow = document.createElement('div');
         btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;';
         const btnCopy = document.createElement('button');
