@@ -657,9 +657,14 @@
                     🗑️ 清除
                 </button>
 
-                <button id="export-fixed-points" style="width: 100%; padding: 10px; margin: 6px 0; background: #009688; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px;">
-                    📤 导出固定点位（复制到剪贴板）
-                </button>
+                <div style="display: flex; gap: 5px; margin: 6px 0;">
+                    <button id="export-fixed-points" style="flex: 1; padding: 10px; background: #009688; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px;">
+                        📤 导出
+                    </button>
+                    <button id="import-fixed-points" style="flex: 1; padding: 10px; background: #00897B; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px;">
+                        📥 导入
+                    </button>
+                </div>
 
                 <div id="status" style="margin-top: 14px; padding-top: 14px; border-top: 1px solid #555; font-size: 13px; color: #aaa;">
                     就绪
@@ -806,6 +811,52 @@
                 updateStatus('复制失败，请手动复制。内容已弹窗显示');
                 prompt('请手动复制以下内容（Ctrl+C）:', json);
             }
+        };
+
+        // 导入固定点位（从剪贴板或粘贴的 JSON）
+        document.getElementById('import-fixed-points').onclick = async () => {
+            let text = '';
+            if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                try {
+                    text = await navigator.clipboard.readText();
+                } catch (e) {}
+            }
+            if (!text || !text.trim()) {
+                text = prompt('请粘贴导出的固定点位 JSON（与导出格式一致）：', '');
+            }
+            if (!text || !text.trim()) {
+                updateStatus('已取消导入');
+                return;
+            }
+            let arr;
+            try {
+                arr = JSON.parse(text.trim());
+            } catch (e) {
+                updateStatus('导入失败：JSON 格式错误');
+                return;
+            }
+            if (!Array.isArray(arr)) {
+                updateStatus('导入失败：需要是数组格式');
+                return;
+            }
+            const valid = arr.filter(item => item && typeof item.x === 'number' && typeof item.y === 'number');
+            if (valid.length === 0) {
+                updateStatus('导入失败：未找到有效的 {x, y} 点位');
+                return;
+            }
+            if (valid.length < arr.length) {
+                console.warn('导入时忽略了', arr.length - valid.length, '个无效项');
+            }
+            recordedClicks = valid;
+            document.getElementById('click-count').textContent = recordedClicks.length;
+            saveToLocal();
+            document.getElementById('save-indicator').style.display = 'inline';
+            isShowingMarkers = true;
+            document.getElementById('show-markers').style.background = '#009688';
+            document.getElementById('show-markers').textContent = '👁️ 隐藏';
+            if (canvas) showMarkers(false);
+            updateStatus(`已导入 ${recordedClicks.length} 个点位`);
+            console.warn('导入固定点位:', recordedClicks.length, '个');
         };
 
         // 隐藏按钮
