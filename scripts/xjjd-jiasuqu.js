@@ -180,11 +180,11 @@ if (window.self === window.top) return;
     height: HANDLE_SIZE + "px",
     borderRadius: "14px",
     boxShadow: "0 4px 14px rgba(0,0,0,0.22)",
-    background: isIE7 ? "http://www.etherdream.com/JSGear/gear.png" : "linear-gradient(180deg,#6d8aff 0%,#4c6ef5 50%,#364fc7 100%)",
+    background: isIE7 ? "http://www.etherdream.com/JSGear/gear.png" : "linear-gradient(180deg,#ffd43b 0%,#fab005 50%,#e67700 100%)",
     font: "600 32px system-ui,-apple-system,sans-serif",
     lineHeight: HANDLE_SIZE + "px",
     textAlign: "center",
-    color: "#fff",
+    color: "#1a1a1a",
     cursor: "move",
     MozUserSelect: "none",
     WebkitUserSelect: "none",
@@ -216,11 +216,11 @@ if (window.self === window.top) return;
     left: 0,
     top: 0,
     font: "bold 100px system-ui,-apple-system,sans-serif",
-    color: "#4c6ef5",
+    color: "#e67700",
     textAlign: "center",
     cursor: "move",
     opacity: "0.92",
-    textShadow: "0 2px 24px rgba(76,110,245,0.45)",
+    textShadow: "0 2px 24px rgba(230,119,0,0.4)",
   };
 
   const styleSegment = {
@@ -391,7 +391,7 @@ if (window.self === window.top) return;
       const seg = doc.createElement("div");
       seg.innerHTML = i;
       assignStyle(styleSegment, seg.style);
-      seg.style.background = i % 2 ? "rgba(76,110,245,0.4)" : "rgba(76,110,245,0.2)";
+      seg.style.background = i % 2 ? "rgba(250,176,5,0.45)" : "rgba(230,119,0,0.25)";
       scaleBarEl.appendChild(seg);
       scaleSegmentStyles.push(seg.style);
     }
