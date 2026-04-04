@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         极简自动点击录制器
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  录制点击，自动重复（支持手机触摸录制）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
@@ -932,6 +932,7 @@
             const rect = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
             const exportData = {
                 v: 2,
+                canvas: { w: canvas ? canvas.width : 0, h: canvas ? canvas.height : 0 },
                 display: { w: rect.width, h: rect.height },
                 clicks: recordedClicks,
             };
@@ -1003,34 +1004,35 @@
             const curRect = canvas ? canvas.getBoundingClientRect() : null;
             let statusMsg = `已导入 ${valid.length} 个点位`;
 
-            if (importVersion === 2 && origDisplay && curRect && curRect.width > 0) {
-                // v2 格式：坐标基于 CSS 显示尺寸百分比，按宽高比重映射
-                const origRatio = origDisplay.w / origDisplay.h;
-                const curRatio = curRect.width / curRect.height;
-                if (Math.abs(origRatio - curRatio) >= 0.01) {
-                    recordedClicks = remapCoordinates(valid, origDisplay.w, origDisplay.h, curRect.width, curRect.height);
-                    console.warn(`v2 宽高比不同 (${origRatio.toFixed(2)} → ${curRatio.toFixed(2)})，已重映射`);
+            if (importVersion === 2 && curRect && curRect.width > 0 && canvas) {
+                // v2 格式：比较 CANVAS 内部分辨率的宽高比（非 display）
+                // 同一游戏在不同设备 canvas 分辨率通常相同，此时无需重映射
+                const origCvs = (parsed.canvas && parsed.canvas.w && parsed.canvas.h) ? parsed.canvas : null;
+                const origCW = origCvs ? origCvs.w : (origDisplay ? origDisplay.w : 0);
+                const origCH = origCvs ? origCvs.h : (origDisplay ? origDisplay.h : 0);
+                const origRatio = origCW / origCH;
+                const curRatio = canvas.width / canvas.height;
+                if (origCW > 0 && Math.abs(origRatio - curRatio) >= 0.01) {
+                    recordedClicks = remapCoordinates(valid, origCW, origCH, canvas.width, canvas.height);
+                    console.warn(`Canvas 宽高比不同 (${origRatio.toFixed(2)} → ${curRatio.toFixed(2)})，已重映射`);
                     statusMsg = `已导入 ${recordedClicks.length} 个点位（已适配屏幕）`;
                 } else {
                     recordedClicks = valid;
+                    console.warn('Canvas 宽高比相同，无需重映射');
                 }
             } else if (importVersion === 1 && origCanvas && curRect && curRect.width > 0 && canvas) {
-                // v1 格式：坐标基于 canvas 内部分辨率百分比，需先转为显示百分比再重映射
-                const origDpr = origCanvas.w / origCanvas.h; // 只能拿到宽高比
-                const curDpr = curRect.width / curRect.height;
-                // v1 坐标是 css_offset / canvas.width * 100，等价于 display_pct / DPR
-                // 无法精确转换，但宽高比相同时数值可复用；不同时按宽高比重映射
-                if (Math.abs(origDpr - curDpr) >= 0.01) {
-                    recordedClicks = remapCoordinates(valid, origCanvas.w, origCanvas.h, canvas.width, canvas.height);
-                    // 还需要从 canvas 百分比转为 rect 百分比
-                    const sx = canvas.width / curRect.width;
-                    const sy = canvas.height / curRect.height;
-                    recordedClicks = recordedClicks.map(c => ({ x: c.x * sx, y: c.y * sy }));
+                // v1 格式：坐标是 css_offset / canvas_orig.width * 100
+                // 先用 canvas 宽高比决定是否需要 aspect-ratio 重映射
+                const origRatio = origCanvas.w / origCanvas.h;
+                const curRatio = canvas.width / canvas.height;
+                // 无论是否重映射，都需要从 v1 canvas 百分比转为 v2 rect 百分比
+                const sx = canvas.width / curRect.width;
+                const sy = canvas.height / curRect.height;
+                if (Math.abs(origRatio - curRatio) >= 0.01) {
+                    const remapped = remapCoordinates(valid, origCanvas.w, origCanvas.h, canvas.width, canvas.height);
+                    recordedClicks = remapped.map(c => ({ x: c.x * sx, y: c.y * sy }));
                     statusMsg = `已导入 ${recordedClicks.length} 个点位（v1→v2 已适配）`;
                 } else {
-                    // 宽高比相同，只做 DPR 转换
-                    const sx = canvas.width / curRect.width;
-                    const sy = canvas.height / curRect.height;
                     recordedClicks = valid.map(c => ({ x: c.x * sx, y: c.y * sy }));
                     statusMsg = `已导入 ${recordedClicks.length} 个点位（v1→v2 已转换）`;
                 }
