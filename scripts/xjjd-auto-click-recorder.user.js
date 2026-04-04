@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         极简自动点击录制器
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      2.0
 // @description  录制点击，自动重复（支持手机触摸录制）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
@@ -35,6 +35,7 @@
     let isEditMode = false;
     let isShowingMarkers = false;
     let markersOverlay = null;
+    let needsMigrationV2 = false; // 旧版 localStorage 数据迁移标志
     // 触摸/点击去重：同一 tap 可能先 touchend 再 click，只记录一次
     let lastRecordedTime = 0;
     let lastRecordedClientX = -9999;
@@ -283,7 +284,7 @@
     // ========== 本地存储 ==========
     function saveToLocal() {
         try {
-            localStorage.setItem('autoClickRecording', JSON.stringify(recordedClicks));
+            localStorage.setItem('autoClickRecording', JSON.stringify({ v: 2, clicks: recordedClicks }));
             console.warn('✓ 录制已自动保存到本地');
 
             // 显示保存指示器
@@ -299,15 +300,35 @@
     function loadFromLocal() {
         try {
             const saved = localStorage.getItem('autoClickRecording');
-            if (saved) {
-                recordedClicks = JSON.parse(saved);
-                console.warn(`✓ 加载了之前的录制: ${recordedClicks.length}个点击`);
-                return true;
+            if (!saved) return false;
+            const data = JSON.parse(saved);
+            if (Array.isArray(data)) {
+                recordedClicks = data;
+                needsMigrationV2 = true;
+                console.warn(`✓ 加载了旧版录制 (需迁移): ${recordedClicks.length}个点击`);
+            } else if (data && data.v === 2 && Array.isArray(data.clicks)) {
+                recordedClicks = data.clicks;
+                console.warn(`✓ 加载了v2录制: ${recordedClicks.length}个点击`);
+            } else {
+                return false;
             }
+            return true;
         } catch (e) {
             console.warn('加载失败:', e);
         }
         return false;
+    }
+
+    function migrateToV2() {
+        if (!needsMigrationV2 || !canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const sx = canvas.width / rect.width;
+        const sy = canvas.height / rect.height;
+        recordedClicks = recordedClicks.map(c => ({ x: c.x * sx, y: c.y * sy }));
+        needsMigrationV2 = false;
+        saveToLocal();
+        console.warn(`✓ 已迁移 ${recordedClicks.length} 个点位到v2 (DPR缩放: ${sx.toFixed(2)}x${sy.toFixed(2)})`);
     }
 
     function clearLocal() {
@@ -385,8 +406,8 @@
         // 检查是否和所有已录制的点太接近（去重）
         for (let i = 0; i < recordedClicks.length; i++) {
             const existingClick = recordedClicks[i];
-            const existingX = (existingClick.x / 100) * canvas.width;
-            const existingY = (existingClick.y / 100) * canvas.height;
+            const existingX = (existingClick.x / 100) * rect.width;
+            const existingY = (existingClick.y / 100) * rect.height;
 
             const distance = Math.sqrt(Math.pow(x - existingX, 2) + Math.pow(y - existingY, 2));
 
@@ -400,9 +421,9 @@
             }
         }
 
-        // 使用百分比（适应不同分辨率）
-        const xPercent = (x / canvas.width) * 100;
-        const yPercent = (y / canvas.height) * 100;
+        // 使用 CSS 显示尺寸的百分比（真正的相对坐标，跨设备通用）
+        const xPercent = (x / rect.width) * 100;
+        const yPercent = (y / rect.height) * 100;
 
         recordedClicks.push({ x: xPercent, y: yPercent });
 
@@ -484,7 +505,8 @@
             toggleEditMode();
         }
 
-        console.warn(`开始回放 ${recordedClicks.length} 个点击`);
+        const playRect = canvas.getBoundingClientRect();
+        console.warn(`开始回放 ${recordedClicks.length} 个点击 (display: ${playRect.width.toFixed(0)}x${playRect.height.toFixed(0)})`);
 
         for (let i = 0; i < recordedClicks.length; i++) {
             if (!isPlaying) {
@@ -493,8 +515,8 @@
             }
 
             const click = recordedClicks[i];
-            const x = (click.x / 100) * canvas.width;
-            const y = (click.y / 100) * canvas.height;
+            const x = (click.x / 100) * playRect.width;
+            const y = (click.y / 100) * playRect.height;
 
             console.warn(`回放 ${i + 1}/${recordedClicks.length}: (${x.toFixed(0)}, ${y.toFixed(0)})`);
             updateStatus(`回放中: ${i + 1}/${recordedClicks.length}`);
@@ -626,10 +648,10 @@
             z-index: 99998;
         `;
 
-        // 为每个点击创建标记
+        // 为每个点击创建标记（使用 CSS 显示尺寸定位）
         recordedClicks.forEach((click, index) => {
-            const x = (click.x / 100) * canvas.width;
-            const y = (click.y / 100) * canvas.height;
+            const x = (click.x / 100) * rect.width;
+            const y = (click.y / 100) * rect.height;
 
             const marker = document.createElement('div');
             marker.className = 'click-marker';
@@ -901,28 +923,30 @@
             }
         };
 
-        // 导出固定点位（百分比坐标 + Canvas 尺寸，支持跨设备导入）
+        // 导出固定点位（v2: 百分比基于 CSS 显示尺寸，跨设备通用）
         document.getElementById('export-fixed-points').onclick = async () => {
             if (recordedClicks.length === 0) {
                 updateStatus('没有录制数据可导出');
                 return;
             }
+            const rect = canvas ? canvas.getBoundingClientRect() : { width: 0, height: 0 };
             const exportData = {
-                canvas: { w: canvas ? canvas.width : 0, h: canvas ? canvas.height : 0 },
+                v: 2,
+                display: { w: rect.width, h: rect.height },
                 clicks: recordedClicks,
             };
             const json = JSON.stringify(exportData);
             const ok = await copyToClipboard(json);
             if (ok) {
-                updateStatus('已复制到剪贴板（含Canvas尺寸，可跨设备使用）');
-                console.warn('导出固定点位:', recordedClicks.length, '个, canvas:', exportData.canvas);
+                updateStatus('已复制到剪贴板（v2格式，可跨设备使用）');
+                console.warn('导出固定点位:', recordedClicks.length, '个, display:', exportData.display);
             } else {
                 updateStatus('复制失败，请手动复制。内容已弹窗显示');
                 showTextForCopy('请手动复制以下内容（Ctrl+C）：', json);
             }
         };
 
-        // 导入固定点位（兼容旧数组格式和新 {canvas, clicks} 格式，自动重映射坐标）
+        // 导入固定点位（支持 v2/v1/旧数组 三种格式，自动适配当前屏幕）
         document.getElementById('import-fixed-points').onclick = async () => {
             let text = '';
             if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
@@ -931,7 +955,7 @@
                 } catch (e) {}
             }
             if (!text || !text.trim()) {
-                text = await getInputFromUser('请粘贴导出的固定点位 JSON（支持旧数组格式和新格式）：', '');
+                text = await getInputFromUser('请粘贴导出的固定点位 JSON：', '');
             }
             if (!text || !text.trim()) {
                 updateStatus('已取消导入');
@@ -946,14 +970,21 @@
             }
 
             let arr;
-            let origCanvas = null;
+            let origDisplay = null; // v2: CSS 显示尺寸
+            let origCanvas = null;  // v1: Canvas 内部尺寸
+            let importVersion = 0;
 
             if (Array.isArray(parsed)) {
                 arr = parsed;
+                importVersion = 0;
             } else if (parsed && Array.isArray(parsed.clicks)) {
                 arr = parsed.clicks;
-                if (parsed.canvas && parsed.canvas.w && parsed.canvas.h) {
+                if (parsed.v === 2 && parsed.display && parsed.display.w && parsed.display.h) {
+                    origDisplay = parsed.display;
+                    importVersion = 2;
+                } else if (parsed.canvas && parsed.canvas.w && parsed.canvas.h) {
                     origCanvas = parsed.canvas;
+                    importVersion = 1;
                 }
             } else {
                 updateStatus('导入失败：格式不识别');
@@ -969,22 +1000,50 @@
                 console.warn('导入时忽略了', arr.length - valid.length, '个无效项');
             }
 
-            if (origCanvas && canvas) {
-                const origRatio = origCanvas.w / origCanvas.h;
-                const curRatio = canvas.width / canvas.height;
+            const curRect = canvas ? canvas.getBoundingClientRect() : null;
+            let statusMsg = `已导入 ${valid.length} 个点位`;
+
+            if (importVersion === 2 && origDisplay && curRect && curRect.width > 0) {
+                // v2 格式：坐标基于 CSS 显示尺寸百分比，按宽高比重映射
+                const origRatio = origDisplay.w / origDisplay.h;
+                const curRatio = curRect.width / curRect.height;
                 if (Math.abs(origRatio - curRatio) >= 0.01) {
-                    recordedClicks = remapCoordinates(valid, origCanvas.w, origCanvas.h, canvas.width, canvas.height);
-                    console.warn(`宽高比不同 (${origRatio.toFixed(2)} → ${curRatio.toFixed(2)})，已自动重映射坐标`);
-                    updateStatus(`已导入 ${recordedClicks.length} 个点位（已适配当前屏幕）`);
+                    recordedClicks = remapCoordinates(valid, origDisplay.w, origDisplay.h, curRect.width, curRect.height);
+                    console.warn(`v2 宽高比不同 (${origRatio.toFixed(2)} → ${curRatio.toFixed(2)})，已重映射`);
+                    statusMsg = `已导入 ${recordedClicks.length} 个点位（已适配屏幕）`;
                 } else {
                     recordedClicks = valid;
-                    updateStatus(`已导入 ${recordedClicks.length} 个点位`);
                 }
+            } else if (importVersion === 1 && origCanvas && curRect && curRect.width > 0 && canvas) {
+                // v1 格式：坐标基于 canvas 内部分辨率百分比，需先转为显示百分比再重映射
+                const origDpr = origCanvas.w / origCanvas.h; // 只能拿到宽高比
+                const curDpr = curRect.width / curRect.height;
+                // v1 坐标是 css_offset / canvas.width * 100，等价于 display_pct / DPR
+                // 无法精确转换，但宽高比相同时数值可复用；不同时按宽高比重映射
+                if (Math.abs(origDpr - curDpr) >= 0.01) {
+                    recordedClicks = remapCoordinates(valid, origCanvas.w, origCanvas.h, canvas.width, canvas.height);
+                    // 还需要从 canvas 百分比转为 rect 百分比
+                    const sx = canvas.width / curRect.width;
+                    const sy = canvas.height / curRect.height;
+                    recordedClicks = recordedClicks.map(c => ({ x: c.x * sx, y: c.y * sy }));
+                    statusMsg = `已导入 ${recordedClicks.length} 个点位（v1→v2 已适配）`;
+                } else {
+                    // 宽高比相同，只做 DPR 转换
+                    const sx = canvas.width / curRect.width;
+                    const sy = canvas.height / curRect.height;
+                    recordedClicks = valid.map(c => ({ x: c.x * sx, y: c.y * sy }));
+                    statusMsg = `已导入 ${recordedClicks.length} 个点位（v1→v2 已转换）`;
+                }
+                console.warn('v1 格式已转换为 v2');
             } else {
+                // 旧数组格式或缺少参考信息，原样导入
                 recordedClicks = valid;
-                updateStatus(`已导入 ${recordedClicks.length} 个点位`);
+                if (importVersion === 0) {
+                    console.warn('旧数组格式，无法自动适配，建议用新版重新导出');
+                }
             }
 
+            updateStatus(statusMsg);
             document.getElementById('click-count').textContent = recordedClicks.length;
             saveToLocal();
             document.getElementById('save-indicator').style.display = 'inline';
@@ -992,7 +1051,7 @@
             document.getElementById('show-markers').style.background = '#009688';
             document.getElementById('show-markers').textContent = '👁️ 隐藏';
             if (canvas) showMarkers(false);
-            console.warn('导入固定点位:', recordedClicks.length, '个');
+            console.warn('导入固定点位:', recordedClicks.length, '个 (v' + importVersion + ')');
         };
 
         // 隐藏按钮
@@ -1106,37 +1165,30 @@
         // 查找Canvas
         canvas = findCanvas();
 
+        function onCanvasReady() {
+            const rect = canvas.getBoundingClientRect();
+            console.warn('✓ 找到Canvas: ' + canvas.width + 'x' + canvas.height + ' (display: ' + rect.width.toFixed(0) + 'x' + rect.height.toFixed(0) + ')');
+            migrateToV2();
+            if (hasLoaded) {
+                updateStatus(`已加载: ${recordedClicks.length}个点击`);
+                if (isShowingMarkers) showMarkers(false);
+            } else {
+                updateStatus('就绪');
+            }
+        }
+
         if (!canvas) {
             console.warn('未找到Canvas，等待游戏加载...');
             updateStatus('等待Canvas加载...');
-            // 持续检查Canvas
             const retry = setInterval(() => {
                 canvas = findCanvas();
                 if (canvas) {
-                    console.warn('✓ 找到Canvas: ' + canvas.width + ' x ' + canvas.height);
-                    if (hasLoaded) {
-                        updateStatus(`已加载: ${recordedClicks.length}个点击`);
-                        // Canvas加载后，如果已经设置为显示模式，则显示标记
-                        if (isShowingMarkers) {
-                            showMarkers(false);
-                        }
-                    } else {
-                        updateStatus('就绪');
-                    }
+                    onCanvasReady();
                     clearInterval(retry);
                 }
             }, 500);
         } else {
-            console.warn('✓ 找到Canvas: ' + canvas.width + ' x ' + canvas.height);
-            if (hasLoaded) {
-                updateStatus(`已加载: ${recordedClicks.length}个点击`);
-                // Canvas已存在，如果已经设置为显示模式，则显示标记
-                if (isShowingMarkers) {
-                    showMarkers(false);
-                }
-            } else {
-                updateStatus('就绪');
-            }
+            onCanvasReady();
         }
     }
 
