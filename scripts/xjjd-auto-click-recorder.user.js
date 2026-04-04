@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         极简自动点击录制器
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  录制点击，自动重复（支持手机触摸录制）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
@@ -43,6 +43,38 @@
     const RECORD_DEDUPE_PX = 30;
 
     // ========== 工具函数 ==========
+    /**
+     * 跨设备坐标重映射：将在原始 Canvas 上录制的百分比坐标，
+     * 映射到当前 Canvas 上（假设游戏内容按等比缩放 + 居中渲染）。
+     */
+    function remapCoordinates(clicks, origW, origH, curW, curH) {
+        const origRatio = origW / origH;
+        const curRatio = curW / curH;
+
+        if (Math.abs(origRatio - curRatio) < 0.01) return clicks;
+
+        let contentW, contentH, offsetXPct, offsetYPct;
+        if (curRatio > origRatio) {
+            contentH = curH;
+            contentW = curH * origRatio;
+            offsetXPct = ((curW - contentW) / 2 / curW) * 100;
+            offsetYPct = 0;
+        } else {
+            contentW = curW;
+            contentH = curW / origRatio;
+            offsetXPct = 0;
+            offsetYPct = ((curH - contentH) / 2 / curH) * 100;
+        }
+
+        const scaleX = contentW / curW;
+        const scaleY = contentH / curH;
+
+        return clicks.map(c => ({
+            x: offsetXPct + c.x * scaleX,
+            y: offsetYPct + c.y * scaleY,
+        }));
+    }
+
     /** 从鼠标或触摸事件中取 clientX/clientY（兼容桌面与手机） */
     function getEventClientXY(e) {
         if (e.touches && e.touches.length > 0) {
@@ -869,24 +901,28 @@
             }
         };
 
-        // 导出固定点位（百分比坐标，供「固定点位循环点击器」使用）
+        // 导出固定点位（百分比坐标 + Canvas 尺寸，支持跨设备导入）
         document.getElementById('export-fixed-points').onclick = async () => {
             if (recordedClicks.length === 0) {
                 updateStatus('没有录制数据可导出');
                 return;
             }
-            const json = JSON.stringify(recordedClicks);
+            const exportData = {
+                canvas: { w: canvas ? canvas.width : 0, h: canvas ? canvas.height : 0 },
+                clicks: recordedClicks,
+            };
+            const json = JSON.stringify(exportData);
             const ok = await copyToClipboard(json);
             if (ok) {
-                updateStatus('已复制到剪贴板，可在「固定点位循环点击器」中粘贴导入');
-                console.warn('导出固定点位:', recordedClicks.length, '个');
+                updateStatus('已复制到剪贴板（含Canvas尺寸，可跨设备使用）');
+                console.warn('导出固定点位:', recordedClicks.length, '个, canvas:', exportData.canvas);
             } else {
                 updateStatus('复制失败，请手动复制。内容已弹窗显示');
                 showTextForCopy('请手动复制以下内容（Ctrl+C）：', json);
             }
         };
 
-        // 导入固定点位（从剪贴板或粘贴的 JSON）
+        // 导入固定点位（兼容旧数组格式和新 {canvas, clicks} 格式，自动重映射坐标）
         document.getElementById('import-fixed-points').onclick = async () => {
             let text = '';
             if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
@@ -895,23 +931,35 @@
                 } catch (e) {}
             }
             if (!text || !text.trim()) {
-                text = await getInputFromUser('请粘贴导出的固定点位 JSON（与导出格式一致）：', '');
+                text = await getInputFromUser('请粘贴导出的固定点位 JSON（支持旧数组格式和新格式）：', '');
             }
             if (!text || !text.trim()) {
                 updateStatus('已取消导入');
                 return;
             }
-            let arr;
+            let parsed;
             try {
-                arr = JSON.parse(text.trim());
+                parsed = JSON.parse(text.trim());
             } catch (e) {
                 updateStatus('导入失败：JSON 格式错误');
                 return;
             }
-            if (!Array.isArray(arr)) {
-                updateStatus('导入失败：需要是数组格式');
+
+            let arr;
+            let origCanvas = null;
+
+            if (Array.isArray(parsed)) {
+                arr = parsed;
+            } else if (parsed && Array.isArray(parsed.clicks)) {
+                arr = parsed.clicks;
+                if (parsed.canvas && parsed.canvas.w && parsed.canvas.h) {
+                    origCanvas = parsed.canvas;
+                }
+            } else {
+                updateStatus('导入失败：格式不识别');
                 return;
             }
+
             const valid = arr.filter(item => item && typeof item.x === 'number' && typeof item.y === 'number');
             if (valid.length === 0) {
                 updateStatus('导入失败：未找到有效的 {x, y} 点位');
@@ -920,7 +968,23 @@
             if (valid.length < arr.length) {
                 console.warn('导入时忽略了', arr.length - valid.length, '个无效项');
             }
-            recordedClicks = valid;
+
+            if (origCanvas && canvas) {
+                const origRatio = origCanvas.w / origCanvas.h;
+                const curRatio = canvas.width / canvas.height;
+                if (Math.abs(origRatio - curRatio) >= 0.01) {
+                    recordedClicks = remapCoordinates(valid, origCanvas.w, origCanvas.h, canvas.width, canvas.height);
+                    console.warn(`宽高比不同 (${origRatio.toFixed(2)} → ${curRatio.toFixed(2)})，已自动重映射坐标`);
+                    updateStatus(`已导入 ${recordedClicks.length} 个点位（已适配当前屏幕）`);
+                } else {
+                    recordedClicks = valid;
+                    updateStatus(`已导入 ${recordedClicks.length} 个点位`);
+                }
+            } else {
+                recordedClicks = valid;
+                updateStatus(`已导入 ${recordedClicks.length} 个点位`);
+            }
+
             document.getElementById('click-count').textContent = recordedClicks.length;
             saveToLocal();
             document.getElementById('save-indicator').style.display = 'inline';
@@ -928,7 +992,6 @@
             document.getElementById('show-markers').style.background = '#009688';
             document.getElementById('show-markers').textContent = '👁️ 隐藏';
             if (canvas) showMarkers(false);
-            updateStatus(`已导入 ${recordedClicks.length} 个点位`);
             console.warn('导入固定点位:', recordedClicks.length, '个');
         };
 

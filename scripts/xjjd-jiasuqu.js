@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         神行百速
 // @namespace    http://tampermonkey.net/
-// @version      1.04
+// @version      2.2
 // @description  对XJJD提供变速功能
 // @author       ->无语ccky
 // @match        https://www.wanyiwan.top/*
