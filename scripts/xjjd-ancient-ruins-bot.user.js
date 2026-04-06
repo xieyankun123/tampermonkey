@@ -173,185 +173,58 @@
 
     // ==================== 地图格子点击 ====================
 
-    var mapTrying = false;
-    var mapPos = null;
-    var mapDetectFailed = false;
-
-    /** 自动检测英雄在地图上的位置：找到与格子重合的非格子动画节点 */
-    function detectHeroPos() {
-        var map = findNode('view_map');
-        if (!map) return null;
-        var grid = getMapGrid();
-        if (grid.length === 0) return null;
-
-        var candidates = [];
-        walk(map, function(node) {
-            if (node === map) return;
-            if (!isVisible(node)) return;
-            var isAnim = node.constructor && /MovieClip|Skeleton|Animation|Spine/.test(node.constructor.name);
-            if (!isAnim) return;
-            var p = node.parent;
-            while (p && p !== map) {
-                if (p._events && p._events.click) return;
-                p = p.parent;
-            }
-            var pt = getGlobalCenter(node);
-            if (pt) {
-                candidates.push({ x: pt.x, y: pt.y, type: node.constructor.name, name: node.name || '' });
-            }
-        });
-
-        if (candidates.length === 0) return null;
-
-        // 英雄必须与某个格子位置重合，找最近的匹配
-        var bestCell = null, bestDist = Infinity;
-        for (var i = 0; i < candidates.length; i++) {
-            for (var j = 0; j < grid.length; j++) {
-                var dx = candidates[i].x - grid[j].x;
-                var dy = candidates[i].y - grid[j].y;
-                var dist = dx * dx + dy * dy;
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestCell = grid[j];
-                }
-            }
+    /** 在 canvas 上指定 Laya 坐标点击 */
+    function clickAt(gx, gy) {
+        var canvas = document.querySelector('canvas');
+        if (!canvas) return;
+        var rect = canvas.getBoundingClientRect();
+        var clientX = rect.left + gx * (rect.width / Laya.stage.width);
+        var clientY = rect.top + gy * (rect.height / Laya.stage.height);
+        var types = ['mousedown', 'mouseup', 'click'];
+        for (var i = 0; i < types.length; i++) {
+            var evt = document.createEvent('MouseEvents');
+            evt.initMouseEvent(types[i], true, true, window, 0,
+                window.screenX + clientX, window.screenY + clientY,
+                clientX, clientY, false, false, false, false, 0, null);
+            canvas.dispatchEvent(evt);
         }
-
-        var threshold = 80;
-        if (bestDist > threshold * threshold) {
-            log('英雄候选均不在格子附近，回退全扫: ' + candidates.map(function(c) {
-                return c.type + (c.name ? '(' + c.name + ')' : '') + ' @(' + Math.round(c.x) + ',' + Math.round(c.y) + ')';
-            }).join(' | '));
-            return null;
-        }
-
-        return { x: bestCell.x, y: bestCell.y };
     }
 
-    function getMapGrid() {
+    /** 找箭头 → 往下偏移一个箭头高度 → 直接点击；没箭头时点最右侧可点击节点（传送门） */
+    function clickMapNode() {
         var map = findNode('view_map');
-        if (!map) return [];
-        var all = [];
+        if (!map) return;
+
+        var arrow = null;
+        walk(map, function(node) {
+            if (arrow) return;
+            if (node.name && /arrow/i.test(node.name) && isVisible(node)) arrow = node;
+        });
+
+        if (arrow) {
+            var pt = getGlobalCenter(arrow);
+            if (!pt) return;
+            var targetX = pt.x;
+            var targetY = pt.y + (arrow.height || 60);
+            log('箭头 @(' + Math.round(pt.x) + ',' + Math.round(pt.y) + ') → 点击 @(' + Math.round(targetX) + ',' + Math.round(targetY) + ')');
+            clickAt(targetX, targetY);
+            return;
+        }
+
+        var rightmost = null, maxX = -Infinity;
         walk(map, function(node) {
             if (node === map) return;
             if (!node._events || !node._events.click) return;
             if (!isVisible(node)) return;
             var pt = getGlobalCenter(node);
-            if (pt) all.push({ node: node, x: pt.x, y: pt.y });
+            if (pt && pt.x > maxX) { maxX = pt.x; rightmost = node; }
         });
-        all.sort(function(a, b) { return a.x !== b.x ? a.x - b.x : a.y - b.y; });
-        return all;
+        if (rightmost) {
+            log('无箭头，点击最右侧节点 ' + (rightmost.name || '?') + ' @(' + Math.round(maxX) + ')');
+            clickNode(rightmost);
+        }
     }
 
-    /** 根据当前位置，按策略排序候选格子：右→当前→右上→右下 */
-    function buildTryList(all, pos) {
-        var right = [], current = null, rightUp = null, rightDown = null;
-
-        // 找当前位置的格子
-        for (var i = 0; i < all.length; i++) {
-            if (Math.abs(all[i].x - pos.x) < 30 && Math.abs(all[i].y - pos.y) < 30) {
-                current = all[i];
-                break;
-            }
-        }
-
-        // 找右边最近一列
-        var rightAll = all.filter(function(n) { return n.x > pos.x + 20; });
-        if (rightAll.length > 0) {
-            var colX = rightAll[0].x;
-            var col = rightAll.filter(function(n) { return n.x - colX < 40; });
-            col.sort(function(a, b) { return Math.abs(a.y - pos.y) - Math.abs(b.y - pos.y); });
-
-            for (var j = 0; j < col.length; j++) {
-                var dy = col[j].y - pos.y;
-                if (Math.abs(dy) < 30 && !right.length) { right.push(col[j]); }
-                else if (dy < -10 && !rightUp) { rightUp = col[j]; }
-                else if (dy > 10 && !rightDown) { rightDown = col[j]; }
-            }
-            if (!right.length && col.length > 0) right.push(col[0]);
-        }
-
-        var list = [];
-        if (right.length) list.push({ item: right[0], label: '右' });
-        if (current) list.push({ item: current, label: '当前' });
-        if (rightUp) list.push({ item: rightUp, label: '右上' });
-        if (rightDown) list.push({ item: rightDown, label: '右下' });
-        return list;
-    }
-
-    function clickMapNode() {
-        if (mapTrying) return;
-
-        if (!mapPos && !mapDetectFailed) {
-            var detected = detectHeroPos();
-            if (detected) {
-                mapPos = detected;
-                log('检测到英雄位置 @(' + Math.round(detected.x) + ',' + Math.round(detected.y) + ')');
-            } else {
-                mapDetectFailed = true;
-            }
-        }
-
-        var all = getMapGrid();
-        if (all.length === 0) return;
-
-        if (!mapPos) {
-            // 无法检测位置，从左到右全扫
-            mapTrying = true;
-            tryMapScan(all, 0);
-            return;
-        }
-
-        var list = buildTryList(all, mapPos);
-        if (list.length === 0) return;
-        mapTrying = true;
-        tryMapStrategy(list, 0);
-    }
-
-    /** 策略模式：右→当前→右上→右下，全失败则清除位置回退到全扫描 */
-    function tryMapStrategy(list, idx) {
-        if (idx >= list.length) {
-            mapTrying = false;
-            mapPos = null;
-            log('策略方向用尽，下次回退全扫描');
-            return;
-        }
-        var entry = list[idx];
-        clickNode(entry.item.node);
-        log('试格子 [' + entry.label + '] (' + (idx + 1) + '/' + list.length + ')');
-
-        setTimeout(function() {
-            if (detectStep() !== STEPS.MAP) {
-                mapTrying = false;
-                mapDetectFailed = false;
-                mapPos = { x: entry.item.x, y: entry.item.y };
-                return;
-            }
-            tryMapStrategy(list, idx + 1);
-        }, 500);
-    }
-
-    /** 全扫模式：从左到右逐个试（冷启动回退） */
-    function tryMapScan(list, idx) {
-        if (idx >= list.length) {
-            mapTrying = false;
-            log('全扫完毕');
-            return;
-        }
-        var item = list[idx];
-        clickNode(item.node);
-        log('全扫格子 (' + (idx + 1) + '/' + list.length + ')');
-
-        setTimeout(function() {
-            if (detectStep() !== STEPS.MAP) {
-                mapTrying = false;
-                mapDetectFailed = false;
-                mapPos = { x: item.x, y: item.y };
-                return;
-            }
-            tryMapScan(list, idx + 1);
-        }, 500);
-    }
 
     // ==================== 状态机 ====================
 
@@ -384,7 +257,7 @@
     function detectStep() {
         if (!layaReady && !checkLaya()) return STEPS.IDLE;
         if (hasNode('btn_ensure') && hasNode('btn_cancel')) return STEPS.CONFIRM;
-        if (hasNode('btn_confirm') && hasNode('list_reward')) return STEPS.EVENT_RESULT;
+        if (hasNode('btn_confirm')) return STEPS.EVENT_RESULT;
         if (hasNode('item_new') && (hasNode('btn_replace') || hasNode('btn_delete'))) return STEPS.ARTIFACT_EQUIP;
         if (hasNode('list_shop')) return STEPS.SHOP;
         if (hasNode('item1') && hasNode('item2') && hasNode('item3')) return STEPS.ARTIFACT;
@@ -400,13 +273,14 @@
     }
 
     var levelPhase = 0;
+    var plotTryIndex = 0;
 
     function act() {
         if (!isRunning) return;
         var step = detectStep();
         if (step !== currentStep) {
-            if (currentStep === STEPS.MAP) { mapTrying = false; }
-            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; mapPos = null; mapDetectFailed = false; }
+            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; }
+            if (step === STEPS.PLOT_EVENT) { plotTryIndex = 0; }
             currentStep = step;
             log('进入: ' + step);
         }
@@ -438,7 +312,11 @@
                 if (!clickByName('btn_replace')) clickByName('btn_delete');
                 break;
             case STEPS.PLOT_EVENT:
-                clickListItem('list_plot', 0);
+                if (!clickListItem('list_plot', plotTryIndex)) {
+                    plotTryIndex = 0;
+                } else {
+                    plotTryIndex++;
+                }
                 break;
         }
     }
@@ -447,7 +325,7 @@
         if (isRunning) return;
         isRunning = true;
         log('▶ 启动');
-        timer = setInterval(act, 2000);
+        timer = setInterval(act, 1000);
     }
 
     function stop() {
@@ -476,6 +354,26 @@
         });
         log('场景树已输出到控制台 (F12)');
         console.error('[遗迹Bot] 场景树:\n' + lines.join('\n'));
+
+        if (hasNode('view_map')) dumpMap();
+    }
+
+    function dumpMap() {
+        var map = findNode('view_map');
+        if (!map) return;
+        var arrow = null;
+        walk(map, function(node) {
+            if (arrow) return;
+            if (node.name && /arrow/i.test(node.name) && isVisible(node)) arrow = node;
+        });
+        if (arrow) {
+            var pt = getGlobalCenter(arrow);
+            log('箭头: ' + arrow.name + ' ' + Math.round(arrow.width || 0) + 'x' + Math.round(arrow.height || 0) +
+                ' @(' + Math.round(pt.x) + ',' + Math.round(pt.y) + ')' +
+                ' → 点击目标 @(' + Math.round(pt.x) + ',' + Math.round(pt.y + (arrow.height || 60)) + ')');
+        } else {
+            log('未找到箭头');
+        }
     }
 
     // ==================== UI 面板 ====================
