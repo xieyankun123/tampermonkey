@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         古代遗迹自动挂机
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.2
 // @description  小鸡舰队出击 - 古代遗迹自动化（基于 Laya 引擎）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
@@ -69,6 +69,69 @@
 
     function hasNode(name) { return !!findNode(name); }
 
+    /** 难度列表当前焦点（0=难度1），优先 FairyGUI selectedIndex，否则扫「难度N」文案 */
+    function getLevelListCurrentIndex(listName) {
+        var listNode = findNode(listName);
+        if (!listNode || !listNode.$owner) return 0;
+        var gobj = listNode.$owner;
+        var nItems = gobj.numItems || 1;
+        if (gobj.selectedIndex >= 0 && gobj.selectedIndex < nItems) return gobj.selectedIndex;
+        var best = -1;
+        var scan = function(root) {
+            if (!root) return;
+            walk(root, function(node) {
+                var t = getText(node);
+                var m = t.match(/难度\s*(\d+)/);
+                if (m) {
+                    var v = parseInt(m[1], 10) - 1;
+                    if (v >= 0 && v < nItems) best = Math.max(best, v);
+                }
+            });
+        };
+        scan(findNode('panelLevelInfo'));
+        scan(listNode);
+        if (best >= 0) return best;
+        log('未识别当前难度文案，按 index=0 处理');
+        return 0;
+    }
+
+    /** 点击 GList 当前视口里 x 最小的可见子项（难度页即左侧「已通关」卡），不依赖 scrollToView */
+    function clickLeftmostVisibleGListItem(listName) {
+        var listNode = findNode(listName);
+        if (!listNode || !listNode.$owner) return false;
+        var gobj = listNode.$owner;
+        var n = gobj.numItems;
+        if (!n) return false;
+        var sw = Laya.stage.width || 1280;
+        var sh = Laya.stage.height || 640;
+        var margin = 30;
+        var best = null;
+        var minX = Infinity;
+        for (var i = 0; i < n; i++) {
+            try {
+                var cidx = gobj.itemIndexToChildIndex ? gobj.itemIndexToChildIndex(i) : i;
+                if (cidx < 0) continue;
+                var item = gobj.getChildAt(cidx);
+                if (!item || !item.displayObject) continue;
+                var disp = item.displayObject;
+                if (!isVisible(disp)) continue;
+                var pt = getGlobalCenter(disp);
+                if (!pt) continue;
+                if (pt.x < margin || pt.x > sw - margin || pt.y < margin || pt.y > sh - margin) continue;
+                if (pt.x < minX) {
+                    minX = pt.x;
+                    best = disp;
+                }
+            } catch (_) {}
+        }
+        if (best) {
+            clickNode(best);
+            log('点击列表最左可见项 @(' + Math.round(minX) + ')');
+            return true;
+        }
+        return false;
+    }
+
     function getGlobalCenter(node) {
         try {
             var x = 0, y = 0, n = node;
@@ -130,8 +193,12 @@
         return false;
     }
 
-    /** 通过 FairyGUI GList API 选择列表项 */
-    function selectGListItem(listName, index) {
+    /**
+     * FairyGUI GList：scrollToView + selectedIndex；仅当子项中心在舞台可见范围内才对 displayObject 发点击，避免写死坐标。
+     * 难度列表请依赖 act 里多步 scrollToView 回退后再调用（并传 skipScroll）。
+     */
+    function selectGListItem(listName, index, opts) {
+        opts = opts || {};
         var listNode = findNode(listName);
         if (!listNode) return false;
         var gobj = listNode.$owner;
@@ -139,19 +206,33 @@
         if (index < 0) index = gobj.numItems + index;
         if (index < 0 || index >= gobj.numItems) return false;
 
-        // 先滚动到目标项
-        if (gobj.scrollToView) gobj.scrollToView(index);
-        // 直接设置选中索引
+        if (!opts.skipScroll && gobj.scrollToView) gobj.scrollToView(index, false, true);
         gobj.selectedIndex = index;
 
-        // 再通过点击触发游戏事件
         var childIndex = index;
         if (gobj.itemIndexToChildIndex) childIndex = gobj.itemIndexToChildIndex(index);
         var item = gobj.getChildAt(childIndex);
+        var sw = Laya.stage.width || 1280;
+        var sh = Laya.stage.height || 640;
+        var offScreen = function(pt) {
+            if (!pt) return true;
+            var m = 40;
+            return pt.x < m || pt.x > sw - m || pt.y < m || pt.y > sh - m;
+        };
         if (item && item.displayObject) {
-            clickNode(item.displayObject);
+            var pt = getGlobalCenter(item.displayObject);
+            if (offScreen(pt)) {
+                log('选择 [' + listName + '] 第' + (index + 1) + '项 仍在屏外 @(' +
+                    (pt ? Math.round(pt.x) + ',' + Math.round(pt.y) : '?') +
+                    ')，仅 selectedIndex，不写死坐标点击');
+            } else {
+                clickNode(item.displayObject);
+                log('选择 [' + listName + '] 第' + (index + 1) + '/' + gobj.numItems + '项 @(' +
+                    Math.round(pt.x) + ',' + Math.round(pt.y) + ')');
+            }
+        } else {
+            log('选择 [' + listName + '] 第' + (index + 1) + '项（无 displayObject）');
         }
-        log('选择 [' + listName + '] 第' + (index + 1) + '/' + gobj.numItems + '项');
         return true;
     }
 
@@ -273,13 +354,14 @@
     }
 
     var levelPhase = 0;
+    var levelLeftTries = 0;
     var plotTryIndex = 0;
 
     function act() {
         if (!isRunning) return;
         var step = detectStep();
         if (step !== currentStep) {
-            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; }
+            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; levelLeftTries = 0; }
             if (step === STEPS.PLOT_EVENT) { plotTryIndex = 0; }
             currentStep = step;
             log('进入: ' + step);
@@ -289,12 +371,27 @@
             case STEPS.RUINS_LOBBY: clickByName('btn_go'); break;
             case STEPS.LEVEL_SELECT:
                 if (sweepMode && levelPhase === 0) {
-                    if (!selectGListItem('list_level', 0) && !clickListItem('list_level', 0)) {
-                        log('选难度1失败，跳过');
+                    var curPick = getLevelListCurrentIndex('list_level');
+                    if (curPick <= 0) {
+                        levelPhase = 1;
+                    } else if (levelLeftTries >= 14) {
+                        log('点最左已试 ' + levelLeftTries + ' 次，进入确认阶段');
+                        levelPhase = 1;
+                    } else {
+                        levelLeftTries++;
+                        if (!clickLeftmostVisibleGListItem('list_level')) {
+                            var gof = (findNode('list_level') || {}).$owner;
+                            if (gof && gof.scrollToView) gof.scrollToView(0, false, true);
+                            log('难度1模式：未找到屏内子项，仅 scrollToView(0)');
+                        } else {
+                            log('难度1模式：点击最左可见卡（往已通关/难度1），估算 index=' + curPick);
+                        }
                     }
-                    levelPhase = 1;
                 } else if (sweepMode && levelPhase === 1) {
+                    selectGListItem('list_level', 0, { skipScroll: true }) || clickListItem('list_level', 0);
                     levelPhase = 2;
+                } else if (sweepMode && levelPhase === 2) {
+                    levelPhase = 3;
                 } else {
                     clickByName('btn_start');
                 }
