@@ -172,13 +172,63 @@
     }
 
     // ==================== 地图格子点击 ====================
-    // 网格结构：多列，每列若干行，从当前行只能走到下一列的 同行/下一行/上一行
 
     var mapTrying = false;
-    var mapLastRow = -1;
+    var mapPos = null;
+    var mapDetectFailed = false;
 
-    /** 收集所有可点击格子，按列分组，每列内按行(y)排序 */
-    function getMapColumns() {
+    /** 自动检测英雄在地图上的位置：找到与格子重合的非格子动画节点 */
+    function detectHeroPos() {
+        var map = findNode('view_map');
+        if (!map) return null;
+        var grid = getMapGrid();
+        if (grid.length === 0) return null;
+
+        var candidates = [];
+        walk(map, function(node) {
+            if (node === map) return;
+            if (!isVisible(node)) return;
+            var isAnim = node.constructor && /MovieClip|Skeleton|Animation|Spine/.test(node.constructor.name);
+            if (!isAnim) return;
+            var p = node.parent;
+            while (p && p !== map) {
+                if (p._events && p._events.click) return;
+                p = p.parent;
+            }
+            var pt = getGlobalCenter(node);
+            if (pt) {
+                candidates.push({ x: pt.x, y: pt.y, type: node.constructor.name, name: node.name || '' });
+            }
+        });
+
+        if (candidates.length === 0) return null;
+
+        // 英雄必须与某个格子位置重合，找最近的匹配
+        var bestCell = null, bestDist = Infinity;
+        for (var i = 0; i < candidates.length; i++) {
+            for (var j = 0; j < grid.length; j++) {
+                var dx = candidates[i].x - grid[j].x;
+                var dy = candidates[i].y - grid[j].y;
+                var dist = dx * dx + dy * dy;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestCell = grid[j];
+                }
+            }
+        }
+
+        var threshold = 80;
+        if (bestDist > threshold * threshold) {
+            log('英雄候选均不在格子附近，回退全扫: ' + candidates.map(function(c) {
+                return c.type + (c.name ? '(' + c.name + ')' : '') + ' @(' + Math.round(c.x) + ',' + Math.round(c.y) + ')';
+            }).join(' | '));
+            return null;
+        }
+
+        return { x: bestCell.x, y: bestCell.y };
+    }
+
+    function getMapGrid() {
         var map = findNode('view_map');
         if (!map) return [];
         var all = [];
@@ -187,68 +237,119 @@
             if (!node._events || !node._events.click) return;
             if (!isVisible(node)) return;
             var pt = getGlobalCenter(node);
-            if (!pt) return;
-            all.push({ node: node, x: pt.x, y: pt.y });
+            if (pt) all.push({ node: node, x: pt.x, y: pt.y });
         });
-        if (all.length === 0) return [];
-        all.sort(function(a, b) { return a.x - b.x; });
-        var columns = [], curCol = [all[0]];
-        for (var i = 1; i < all.length; i++) {
-            if (all[i].x - curCol[0].x > 40) {
-                curCol.sort(function(a, b) { return a.y - b.y; });
-                columns.push(curCol);
-                curCol = [all[i]];
-            } else {
-                curCol.push(all[i]);
+        all.sort(function(a, b) { return a.x !== b.x ? a.x - b.x : a.y - b.y; });
+        return all;
+    }
+
+    /** 根据当前位置，按策略排序候选格子：右→当前→右上→右下 */
+    function buildTryList(all, pos) {
+        var right = [], current = null, rightUp = null, rightDown = null;
+
+        // 找当前位置的格子
+        for (var i = 0; i < all.length; i++) {
+            if (Math.abs(all[i].x - pos.x) < 30 && Math.abs(all[i].y - pos.y) < 30) {
+                current = all[i];
+                break;
             }
         }
-        curCol.sort(function(a, b) { return a.y - b.y; });
-        columns.push(curCol);
-        return columns;
+
+        // 找右边最近一列
+        var rightAll = all.filter(function(n) { return n.x > pos.x + 20; });
+        if (rightAll.length > 0) {
+            var colX = rightAll[0].x;
+            var col = rightAll.filter(function(n) { return n.x - colX < 40; });
+            col.sort(function(a, b) { return Math.abs(a.y - pos.y) - Math.abs(b.y - pos.y); });
+
+            for (var j = 0; j < col.length; j++) {
+                var dy = col[j].y - pos.y;
+                if (Math.abs(dy) < 30 && !right.length) { right.push(col[j]); }
+                else if (dy < -10 && !rightUp) { rightUp = col[j]; }
+                else if (dy > 10 && !rightDown) { rightDown = col[j]; }
+            }
+            if (!right.length && col.length > 0) right.push(col[0]);
+        }
+
+        var list = [];
+        if (right.length) list.push({ item: right[0], label: '右' });
+        if (current) list.push({ item: current, label: '当前' });
+        if (rightUp) list.push({ item: rightUp, label: '右上' });
+        if (rightDown) list.push({ item: rightDown, label: '右下' });
+        return list;
     }
 
     function clickMapNode() {
         if (mapTrying) return;
-        var columns = getMapColumns();
-        if (columns.length === 0) return;
-        var col = columns[0];
 
-        // 构建尝试顺序：同行 → 下一行 → 上一行，首次默认第一行
-        var tryRows = [];
-        var r = mapLastRow < 0 ? 0 : mapLastRow;
-        if (r < col.length) tryRows.push(r);
-        if (r - 1 >= 0) tryRows.push(r - 1);
-        if (r + 1 < col.length) tryRows.push(r + 1);
-        for (var i = 0; i < col.length; i++) {
-            if (tryRows.indexOf(i) < 0) tryRows.push(i);
+        if (!mapPos && !mapDetectFailed) {
+            var detected = detectHeroPos();
+            if (detected) {
+                mapPos = detected;
+                log('检测到英雄位置 @(' + Math.round(detected.x) + ',' + Math.round(detected.y) + ')');
+            } else {
+                mapDetectFailed = true;
+            }
         }
 
-        var list = [];
-        for (var j = 0; j < tryRows.length; j++) {
-            list.push({ node: col[tryRows[j]].node, row: tryRows[j] });
-        }
+        var all = getMapGrid();
+        if (all.length === 0) return;
 
-        mapTrying = true;
-        tryMapNode(list, 0);
-    }
-
-    function tryMapNode(list, idx) {
-        if (idx >= list.length) {
-            mapTrying = false;
-            log('本列格子全试完');
+        if (!mapPos) {
+            // 无法检测位置，从左到右全扫
+            mapTrying = true;
+            tryMapScan(all, 0);
             return;
         }
-        var item = list[idx];
-        clickNode(item.node);
-        log('试格子 行' + item.row + ' (' + (idx + 1) + '/' + list.length + ')');
+
+        var list = buildTryList(all, mapPos);
+        if (list.length === 0) return;
+        mapTrying = true;
+        tryMapStrategy(list, 0);
+    }
+
+    /** 策略模式：右→当前→右上→右下，全失败则清除位置回退到全扫描 */
+    function tryMapStrategy(list, idx) {
+        if (idx >= list.length) {
+            mapTrying = false;
+            mapPos = null;
+            log('策略方向用尽，下次回退全扫描');
+            return;
+        }
+        var entry = list[idx];
+        clickNode(entry.item.node);
+        log('试格子 [' + entry.label + '] (' + (idx + 1) + '/' + list.length + ')');
 
         setTimeout(function() {
             if (detectStep() !== STEPS.MAP) {
                 mapTrying = false;
-                mapLastRow = item.row;
+                mapDetectFailed = false;
+                mapPos = { x: entry.item.x, y: entry.item.y };
                 return;
             }
-            tryMapNode(list, idx + 1);
+            tryMapStrategy(list, idx + 1);
+        }, 500);
+    }
+
+    /** 全扫模式：从左到右逐个试（冷启动回退） */
+    function tryMapScan(list, idx) {
+        if (idx >= list.length) {
+            mapTrying = false;
+            log('全扫完毕');
+            return;
+        }
+        var item = list[idx];
+        clickNode(item.node);
+        log('全扫格子 (' + (idx + 1) + '/' + list.length + ')');
+
+        setTimeout(function() {
+            if (detectStep() !== STEPS.MAP) {
+                mapTrying = false;
+                mapDetectFailed = false;
+                mapPos = { x: item.x, y: item.y };
+                return;
+            }
+            tryMapScan(list, idx + 1);
         }, 500);
     }
 
@@ -266,6 +367,9 @@
         ARTIFACT:       '神器选择',
         SHOP:           '商店',
         CONFIRM:        '确认弹窗',
+        EVENT_RESULT:   '事件结果',
+        ARTIFACT_EQUIP: '神器装备',
+        PLOT_EVENT:     '剧情事件',
     };
 
     var currentStep = STEPS.IDLE;
@@ -280,12 +384,15 @@
     function detectStep() {
         if (!layaReady && !checkLaya()) return STEPS.IDLE;
         if (hasNode('btn_ensure') && hasNode('btn_cancel')) return STEPS.CONFIRM;
+        if (hasNode('btn_confirm') && hasNode('list_reward')) return STEPS.EVENT_RESULT;
+        if (hasNode('item_new') && (hasNode('btn_replace') || hasNode('btn_delete'))) return STEPS.ARTIFACT_EQUIP;
         if (hasNode('list_shop')) return STEPS.SHOP;
         if (hasNode('item1') && hasNode('item2') && hasNode('item3')) return STEPS.ARTIFACT;
         if (hasNode('panelBaseWin') && hasNode('btn_ok')) return STEPS.VICTORY;
         if (hasNode('list_public') && hasNode('btn_refresh_common')) return STEPS.UPGRADE;
         if (hasNode('list_captain') && hasNode('txt_captain_tip')) return STEPS.CAPTAIN_SELECT;
         if (hasNode('btn_challenge') && hasNode('txt_fight_type')) return STEPS.BATTLE_CONFIRM;
+        if (hasNode('list_plot') && hasNode('txt_tip')) return STEPS.PLOT_EVENT;
         if (hasNode('view_map') && hasNode('btn_give_up')) return STEPS.MAP;
         if (hasNode('list_level') && hasNode('btn_start')) return STEPS.LEVEL_SELECT;
         if (hasNode('btn_go') && hasNode('item_hero_lineup')) return STEPS.RUINS_LOBBY;
@@ -298,8 +405,8 @@
         if (!isRunning) return;
         var step = detectStep();
         if (step !== currentStep) {
-            if (currentStep === STEPS.MAP) { mapTrying = false; mapLastRow = -1; }
-            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; }
+            if (currentStep === STEPS.MAP) { mapTrying = false; }
+            if (step === STEPS.LEVEL_SELECT) { levelPhase = 0; mapPos = null; mapDetectFailed = false; }
             currentStep = step;
             log('进入: ' + step);
         }
@@ -326,6 +433,13 @@
             case STEPS.ARTIFACT: clickByName('item3'); break;
             case STEPS.SHOP: closeSiblingBtn('list_shop'); break;
             case STEPS.CONFIRM: clickByName('btn_ensure'); break;
+            case STEPS.EVENT_RESULT: clickByName('btn_confirm'); break;
+            case STEPS.ARTIFACT_EQUIP:
+                if (!clickByName('btn_replace')) clickByName('btn_delete');
+                break;
+            case STEPS.PLOT_EVENT:
+                clickListItem('list_plot', 0);
+                break;
         }
     }
 
