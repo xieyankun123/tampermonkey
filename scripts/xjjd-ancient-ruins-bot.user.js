@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         古代遗迹自动挂机
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.3
 // @description  小鸡舰队出击 - 古代遗迹自动化（基于 Laya 引擎）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
@@ -343,7 +343,7 @@
         if (hasNode('list_shop')) return STEPS.SHOP;
         if (hasNode('item1') && hasNode('item2') && hasNode('item3')) return STEPS.ARTIFACT;
         if (hasNode('panelBaseWin') && hasNode('btn_ok')) return STEPS.VICTORY;
-        if (hasNode('list_public') && hasNode('btn_refresh_common')) return STEPS.UPGRADE;
+        if (hasNode('list_public') && (hasNode('btn_refresh_common') || hasNode('btn_refresh_vip'))) return STEPS.UPGRADE;
         if (hasNode('list_captain') && hasNode('txt_captain_tip')) return STEPS.CAPTAIN_SELECT;
         if (hasNode('btn_challenge') && hasNode('txt_fight_type')) return STEPS.BATTLE_CONFIRM;
         if (hasNode('list_plot') && hasNode('txt_tip')) return STEPS.PLOT_EVENT;
