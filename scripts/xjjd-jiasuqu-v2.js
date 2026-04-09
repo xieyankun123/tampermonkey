@@ -53,9 +53,22 @@ if (window.self === window.top) return;
         // 初始化锚点
         realBase = virtBase = realNow();
 
-        // 劫持 performance.now()（Laya 主循环用它计算每帧 delta time）
+        // 劫持 performance.now()（兼容直接调用的场景）
         if (origPerf) {
             win.performance.now = function () { return virtualNow(); };
+        }
+
+        // 劫持 requestAnimationFrame 的 timestamp 参数（关键！）
+        // Laya 主循环用 rAF 回调传入的 timestamp 算 delta time，
+        // 不拦截这里，performance.now() 劫持对 Laya 没有效果。
+        if (win.requestAnimationFrame) {
+            var origRAF = win.requestAnimationFrame.bind(win);
+            win.requestAnimationFrame = function (cb) {
+                return origRAF(function (ts) {
+                    // 把真实时间戳换成虚拟时间戳，Laya 算出的 delta 自然放大 f 倍
+                    cb(virtBase + (ts - realBase) * f);
+                });
+            };
         }
 
         // 劫持 Date（兜底：防止游戏里有直接用 Date.now() 计时的地方）
