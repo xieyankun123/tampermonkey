@@ -24,7 +24,12 @@ if (window.self === window.top) return;
             f = 1,   // 当前倍速
             s = [],
             d = 1,
-            p = 0;
+            p = 0,
+            // performance.now() 劫持所需变量（Laya 用 performance.now 计算 delta time）
+            perfOrig = (a.performance && typeof a.performance.now === 'function')
+                ? a.performance.now.bind(a.performance) : null,
+            perfLast = 0,
+            perfVirt = 0;
 
         function m(e, n, t, o) {
             if (e) return (n = +n || 0) < 1 && (n = 1),
@@ -157,6 +162,17 @@ if (window.self === window.top) return;
                 }
                 i = c = +new r;
                 tid = t(w, 1);
+                // 劫持 performance.now()，让 Laya 的 delta time 感知到加速
+                if (perfOrig) {
+                    perfLast = perfOrig();
+                    perfVirt = perfLast;
+                    a.performance.now = function () {
+                        var real = perfOrig();
+                        perfVirt += (real - perfLast) * f;
+                        perfLast = real;
+                        return perfVirt;
+                    };
+                }
             })();
         }
 
@@ -169,6 +185,7 @@ if (window.self === window.top) return;
                     a.setInterval = t;
                     a.clearInterval = o;
                     a.Date = r;
+                    if (perfOrig) a.performance.now = perfOrig;
                     for (var i = 0; i < M.length; i++) {
                         var c = M[i];
                         a[c] = F[c];
@@ -390,6 +407,10 @@ if (window.self === window.top) return;
                 o = k <= 0.5 ? 0.1 + 1.8 * k : 1 + 24 * (k - 0.5);
             o = Math.max(0.1, Math.min(13, o));
             e.setRate(o);
+            // 直接操控 Laya 引擎内部时间缩放，绕过 CPU 瓶颈，手机上也有效
+            try {
+                if (typeof Laya !== 'undefined' && Laya.timer) Laya.timer.scale = o;
+            } catch (_) {}
             n = o % 1 === 0 ? o.toString() : o.toFixed(1);
             if (g.innerHTML != n) {
                 g.innerHTML = n;
