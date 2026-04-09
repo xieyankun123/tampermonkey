@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         神行百速
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  对XJJD提供变速功能
 // @author       ->无语ccky
 // @match        https://www.wanyiwan.top/*
@@ -17,192 +17,75 @@ if (window.self === window.top) return;
 
 !function () {
 
-    // ── 时间加速引擎：劫持 setTimeout / setInterval / Date，实现变速 ──
-    var e = function (e, n, t, o, r, a) {
-        var i, c,
-            l = window.execScript,
-            u = !!window.addEventListener,
-            f = 1,   // 当前倍速
-            s = [],
-            d = 1,
-            p = 0,
-            // performance.now() 劫持所需变量（Laya 用 performance.now 计算 delta time）
-            perfOrig = (a.performance && typeof a.performance.now === 'function')
-                ? a.performance.now.bind(a.performance) : null,
-            perfLast = 0,
-            perfVirt = 0;
+    // ── 时间加速引擎（简化版）──
+    // 策略：只劫持 performance.now() 和 Date，让 Laya 每帧感知到更大的 delta time。
+    // 不动 rAF / setTimeout / setInterval，主循环保持原生 60fps，手机 CPU 零额外压力。
+    // 必须配合 @run-at document-start，确保 Laya 初始化时拿到的就是已劫持的版本。
+    var e = (function (origDate, origPerf, win) {
+        var f        = 1;  // 当前倍速
+        var realBase = 0;  // 上次切速时的真实时间戳
+        var virtBase = 0;  // 上次切速时积累的虚拟时间
 
-        function m(e, n, t, o) {
-            if (e) return (n = +n || 0) < 1 && (n = 1),
-                s[d] = { code: e, delay: n, arg: t, repeat: o, sum: 0, flag: p },
-                d++;
+        function realNow() {
+            return origPerf ? origPerf() : +new origDate();
         }
 
-        function v(e) {
-            e >= 0 && delete s[e];
+        // 当前虚拟时间 = 上次切速时的虚拟时间 + 距今真实时间 × 倍速
+        function virtualNow() {
+            return virtBase + (realNow() - realBase) * f;
         }
 
-        function g(e) {
-            var n = e.code;
-            "function" == typeof n
-                ? l ? n() : e.arg ? n.apply(a, e.arg) : n()
-                : l ? e.arg ? l(n, e.arg[0]) : l(n) : a.eval(n);
-        }
-
-        function w() {
-            var e = +new r,
-                n = (e - i) * f;
-            for (var t in s) {
-                var o = s[t];
-                if (o.flag != p) {
-                    o.sum += n;
-                    if (o.repeat) {
-                        var a = o.sum / o.delay | 0;
-                        for (a > 32 && (a = 32); --a >= 0;) g(o);
-                        o.sum %= o.delay;
-                    } else if (o.sum >= o.delay) {
-                        g(o);
-                        delete s[t];
-                        continue;
-                    }
+        function setRate(rate) {
+            // 切速前先把虚拟时钟推到当前，避免速度切换时时间跳变
+            var rn = realNow();
+            virtBase += (rn - realBase) * f;
+            realBase  = rn;
+            f = rate;
+            // 同步 Laya 内部 timer scale（兼容部分不走 performance.now 的 Laya 版本）
+            try {
+                if (typeof Laya !== 'undefined') {
+                    if (Laya.timer)       Laya.timer.scale       = rate;
+                    if (Laya.systemTimer) Laya.systemTimer.scale = rate;
                 }
-            }
-            i = e;
-            c += n;
-            p++;
+            } catch (_) {}
         }
 
-        var A = [].slice;
+        // 初始化锚点
+        realBase = virtBase = realNow();
 
-        function h(e, n, t) {
-            return t && (t = A.call(arguments, 2)), m(e, n, t, false);
+        // 劫持 performance.now()（Laya 主循环用它计算每帧 delta time）
+        if (origPerf) {
+            win.performance.now = function () { return virtualNow(); };
         }
 
-        function k(e) {
-            v(e);
-        }
-
-        function T(e, n, t) {
-            return t && (t = A.call(arguments, 2)), m(e, n, t, true);
-        }
-
-        function x(e) {
-            v(e);
-        }
-
-        function L(e) {
-            return h(e, 16);
-        }
-
-        var M = [], F = {}, I = [], b = {},
-            y = [
-                "oRequestAnimationFrame",
-                "mozRequestAnimationFrame",
-                "webkitRequestAnimationFrame",
-                "msRequestAnimationFrame",
-                "requestAnimationFrame"
-            ],
-            P = [
-                "cancelAnimationFrame",
-                "cancelRequestAnimationFrame",
-                "mozCancelAnimationFrame",
-                "mozCancelRequestAnimationFrame",
-                "webkitCancelAnimationFrame",
-                "webkitCancelRequestAnimationFrame",
-                "oCancelAnimationFrame",
-                "oCancelRequestAnimationFrame",
-                "msCancelAnimationFrame",
-                "msCancelRequestAnimationFrame"
-            ];
-
-        for (var U = y.length - 1; U >= 0; U--) {
-            var E = y[U];
-            a[E] && (M.push(E), F[E] = a[E]);
-            a[E = P[U]] && (I.push(E), b[E] = a[E]);
-        }
-
-        // 劫持 Date，使其返回加速后的虚拟时间
-        function C(e, n, t, o, a, l, s) {
-            if (!(this instanceof C))
-                return u ? (new C).toString() : (new C).toString().replace(/UTC.+ /, "");
+        // 劫持 Date（兜底：防止游戏里有直接用 Date.now() 计时的地方）
+        function VDate(y, mo, d, h, mi, s, ms) {
+            if (!(this instanceof VDate)) return new origDate(virtualNow()).toString();
             switch (arguments.length) {
-                case 0:
-                    var d = +new r;
-                    return c += (d - i) * f, i = d, new r(c);
-                case 1:  return new r(e);
-                case 2:  return new r(e, n);
-                case 3:  return new r(e, n, t);
-                case 4:  return new r(e, n, t, o);
-                case 5:  return new r(e, n, t, o, a);
-                case 6:  return new r(e, n, t, o, a, l);
-                default: return new r(e, n, t, o, a, l, s);
+                case 0:  return new origDate(virtualNow());
+                case 1:  return new origDate(y);
+                case 2:  return new origDate(y, mo);
+                case 3:  return new origDate(y, mo, d);
+                case 4:  return new origDate(y, mo, d, h);
+                case 5:  return new origDate(y, mo, d, h, mi);
+                case 6:  return new origDate(y, mo, d, h, mi, s);
+                default: return new origDate(y, mo, d, h, mi, s, ms);
             }
         }
+        origDate.now  && (VDate.now  = function () { return Math.round(virtualNow()); });
+        VDate.UTC     = origDate.UTC;
+        VDate.parse   = origDate.parse;
+        VDate.prototype = origDate.prototype;
+        win.Date = VDate;
 
-        r.now && (C.now = function () {
-            var e = r.now();
-            return c += (e - i) * f, i = e, Math.round(c);
-        });
-        C.UTC = r.UTC;
-        C.parse = r.parse;
-        C.prototype = r.prototype;
-
-        var X = "object" == typeof n;
-
-        function j() {
-            X && l("function setTimeout(){}function clearTimeout(){}function setInterval(){}function clearInterval(){}");
-            (function () {
-                a.setTimeout = h;
-                a.clearTimeout = k;
-                a.setInterval = T;
-                a.clearInterval = x;
-                a.Date = C;
-                for (var e = 0; e < M.length; e++) {
-                    a[M[e]] = L;
-                    a[I[e]] = k;
-                }
-                i = c = +new r;
-                tid = t(w, 1);
-                // 劫持 performance.now()，让 Laya 的 delta time 感知到加速
-                if (perfOrig) {
-                    perfLast = perfOrig();
-                    perfVirt = perfLast;
-                    a.performance.now = function () {
-                        var real = perfOrig();
-                        perfVirt += (real - perfLast) * f;
-                        perfLast = real;
-                        return perfVirt;
-                    };
-                }
-            })();
-        }
-
-        return j(), {
-            setup: j,
-            unsetup: function () {
-                (function () {
-                    a.setTimeout = e;
-                    a.clearTimeout = n;
-                    a.setInterval = t;
-                    a.clearInterval = o;
-                    a.Date = r;
-                    if (perfOrig) a.performance.now = perfOrig;
-                    for (var i = 0; i < M.length; i++) {
-                        var c = M[i];
-                        a[c] = F[c];
-                    }
-                })();
-            },
-            setRate: function (e) { f = e; },
-            pause: function () {},
-            resume: function () {},
-            next: function (e) {},
-            rawSetTimeout:   X ? e : function () { return e.apply(a, arguments); },
-            rawClearTimeout: X ? n : function () { return n.apply(a, arguments); },
-            rawSetInterval:  X ? t : function () { return t.apply(a, arguments); },
-            rawClearInterval: X ? o : function () { return o.apply(a, arguments); }
+        return {
+            setRate:          setRate,
+            rawSetTimeout:    setTimeout,
+            rawClearTimeout:  clearTimeout,
+            rawSetInterval:   setInterval,
+            rawClearInterval: clearInterval
         };
-    }(setTimeout, clearTimeout, setInterval, clearInterval, Date, this);
+    }(Date, window.performance && window.performance.now.bind(window.performance), window));
 
 
     // ── UI 部分：拖动齿轮控件 ──
@@ -292,11 +175,11 @@ if (window.self === window.top) return;
 
         // 倍速刻度格子样式
         var C = {
-            position:   "absolute",
-            top:        "2px",
-            height:     "46px",
+            position:    "absolute",
+            top:         "2px",
+            height:      "46px",
             borderRadius:"6px",
-            boxSizing:  "border-box"
+            boxSizing:   "border-box"
         };
 
         // 根据窗口大小重新布局
@@ -408,10 +291,6 @@ if (window.self === window.top) return;
                 o = k <= 0.5 ? 0.1 + 1.8 * k : 1 + 24 * (k - 0.5);
             o = Math.max(0.1, Math.min(13, o));
             e.setRate(o);
-            // 直接操控 Laya 引擎内部时间缩放，绕过 CPU 瓶颈，手机上也有效
-            try {
-                if (typeof Laya !== 'undefined' && Laya.timer) Laya.timer.scale = o;
-            } catch (_) {}
             n = o % 1 === 0 ? o.toString() : o.toFixed(1);
             if (g.innerHTML != n) {
                 g.innerHTML = n;
