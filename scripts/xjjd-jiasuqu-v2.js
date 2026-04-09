@@ -6,6 +6,7 @@
 // @author       ->无语ccky
 // @match        https://www.wanyiwan.top/*
 // @grant        none
+// @run-at       document-start
 // @license      MIT
 // @updateURL    https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu-v2.js
 // @downloadURL  https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu-v2.js
