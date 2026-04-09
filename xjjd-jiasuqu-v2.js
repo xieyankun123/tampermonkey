@@ -7,8 +7,8 @@
 // @match        https://www.wanyiwan.top/*
 // @grant        none
 // @license      MIT
-// @updateURL    https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu.js
-// @downloadURL  https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu.js
+// @updateURL    https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu-v2.js
+// @downloadURL  https://gitee.com/cbbsxx/tampermonkey/raw/master/scripts/xjjd-jiasuqu-v2.js
 // ==/UserScript==
 
 // 仅在 iframe 内运行，顶层页面不展示变速控件
