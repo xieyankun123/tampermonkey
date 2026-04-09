@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         神行百速
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  对XJJD提供变速功能
-// @author       ->无语ccky
+// @author       cbbsxx
 // @match        https://www.wanyiwan.top/*
 // @grant        none
 // @run-at       document-start
@@ -80,10 +80,10 @@ if (window.self === window.top) return;
 
         return {
             setRate:          setRate,
-            rawSetTimeout:    setTimeout,
-            rawClearTimeout:  clearTimeout,
-            rawSetInterval:   setInterval,
-            rawClearInterval: clearInterval
+            rawSetTimeout:    setTimeout.bind(win),
+            rawClearTimeout:  clearTimeout.bind(win),
+            rawSetInterval:   setInterval.bind(win),
+            rawClearInterval: clearInterval.bind(win)
         };
     }(Date, window.performance && window.performance.now.bind(window.performance), window));
 
@@ -388,6 +388,8 @@ if (window.self === window.top) return;
                         }
                     });
 
+                    // document-start 时 documentElement 可能为 null，在 body 就绪后重新获取
+                    i = document.documentElement || i;
                     X();
                     Z();
                 })()
