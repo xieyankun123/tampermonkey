@@ -17,61 +17,44 @@ if (window.self === window.top) return;
 
 !function () {
 
-    // ── 时间加速引擎（简化版）──
-    // 策略：只劫持 performance.now() 和 Date，让 Laya 每帧感知到更大的 delta time。
-    // 不动 rAF / setTimeout / setInterval，主循环保持原生 60fps，手机 CPU 零额外压力。
-    // 必须配合 @run-at document-start，确保 Laya 初始化时拿到的就是已劫持的版本。
+    // ── 时间加速引擎 ──
+    // 核心：以 Date.now()（epoch ms）为统一时间基准，覆盖所有 Laya 计时路径：
+    //   1. Date / Date.now()   — Laya.Browser.now 直接调用它
+    //   2. performance.now()   — 兜底，delta 计算正确
+    //   3. Laya.Browser.now    — setRate 时直接替换，最稳最直接
+    // rAF 时间戳在 Alipay 环境中绕不进 Laya 主循环，不再劫持。
     var e = (function (origDate, origPerf, win) {
         var f        = 1;  // 当前倍速
-        var realBase = 0;  // 上次切速时的真实时间戳
-        var virtBase = 0;  // 上次切速时积累的虚拟时间
+        var realBase = 0;  // 上次切速时的真实 epoch 时间戳
+        var virtBase = 0;  // 上次切速时积累的虚拟 epoch 时间
 
+        // 始终使用 epoch 毫秒，与 Laya.Browser.now 同单位
         function realNow() {
-            return origPerf ? origPerf() : +new origDate();
+            return origDate.now();
         }
 
-        // 当前虚拟时间 = 上次切速时的虚拟时间 + 距今真实时间 × 倍速
+        // 当前虚拟时间（epoch ms）= 上次锚点的虚拟时间 + 距今真实时间 × 倍速
         function virtualNow() {
             return virtBase + (realNow() - realBase) * f;
         }
 
         function setRate(rate) {
-            // 切速前先把虚拟时钟推到当前，避免速度切换时时间跳变
+            // 切速前先把虚拟时钟推进到当前，避免速度切换时时间跳变
             var rn = realNow();
             virtBase += (rn - realBase) * f;
             realBase  = rn;
             f = rate;
-            // 同步 Laya 内部 timer scale（兼容部分不走 performance.now 的 Laya 版本）
-            try {
-                if (typeof Laya !== 'undefined') {
-                    if (Laya.timer)       Laya.timer.scale       = rate;
-                    if (Laya.systemTimer) Laya.systemTimer.scale = rate;
-                }
-            } catch (_) {}
         }
 
         // 初始化锚点
         realBase = virtBase = realNow();
 
-        // 劫持 performance.now()（兼容直接调用的场景）
+        // 劫持 performance.now()（delta 计算正确，绝对值会变大但游戏只用 delta）
         if (origPerf) {
             win.performance.now = function () { return virtualNow(); };
         }
 
-        // 劫持 requestAnimationFrame 的 timestamp 参数（关键！）
-        // Laya 主循环用 rAF 回调传入的 timestamp 算 delta time，
-        // 不拦截这里，performance.now() 劫持对 Laya 没有效果。
-        if (win.requestAnimationFrame) {
-            var origRAF = win.requestAnimationFrame.bind(win);
-            win.requestAnimationFrame = function (cb) {
-                return origRAF(function (ts) {
-                    // 把真实时间戳换成虚拟时间戳，Laya 算出的 delta 自然放大 f 倍
-                    cb(virtBase + (ts - realBase) * f);
-                });
-            };
-        }
-
-        // 劫持 Date（兜底：防止游戏里有直接用 Date.now() 计时的地方）
+        // 劫持 Date / Date.now()（兜底 + 让 Laya.Browser.now 在 document-start 时就生效）
         function VDate(y, mo, d, h, mi, s, ms) {
             if (!(this instanceof VDate)) return new origDate(virtualNow()).toString();
             switch (arguments.length) {
