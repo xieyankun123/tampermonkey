@@ -36,6 +36,21 @@ if (window.self === window.top) return;
     var fpsLastTs = 0;
     var fps = 0;
 
+    var totalDrawCalls = 0;
+    var totalPrimitives = 0;
+    var totalTextureBinds = 0;
+    var renderLastReal = 0;
+    var renderLastDrawCalls = 0;
+    var renderLastPrimitives = 0;
+    var renderLastTextureBinds = 0;
+    var renderDrawPerSec = 0;
+    var renderPrimPerSec = 0;
+    var renderBindPerSec = 0;
+
+    var lagLastReal = 0;
+    var lagAvg = 0;
+    var lagMax = 0;
+
     function createNativeClock() {
         try {
             var iframe = document.createElement("iframe");
@@ -64,6 +79,90 @@ if (window.self === window.top) return;
 
     function getLayaTimer() {
         return window.Laya && window.Laya.timer;
+    }
+
+    function estimatePrimitives(gl, mode, count) {
+        if (!gl || !count) return 0;
+        switch (mode) {
+            case gl.TRIANGLES: return count / 3;
+            case gl.TRIANGLE_STRIP:
+            case gl.TRIANGLE_FAN: return Math.max(0, count - 2);
+            case gl.LINES: return count / 2;
+            case gl.LINE_STRIP: return Math.max(0, count - 1);
+            case gl.POINTS: return count;
+            default: return 0;
+        }
+    }
+
+    function hookWebGLContext(Ctor) {
+        if (!Ctor || !Ctor.prototype || Ctor.prototype.__xjjdDebugHooked) return;
+        Ctor.prototype.__xjjdDebugHooked = true;
+
+        var proto = Ctor.prototype;
+        var rawDrawArrays = proto.drawArrays;
+        var rawDrawElements = proto.drawElements;
+        var rawBindTexture = proto.bindTexture;
+
+        if (rawDrawArrays) {
+            proto.drawArrays = function (mode, first, count) {
+                totalDrawCalls++;
+                totalPrimitives += estimatePrimitives(this, mode, count);
+                return rawDrawArrays.apply(this, arguments);
+            };
+        }
+
+        if (rawDrawElements) {
+            proto.drawElements = function (mode, count, type, offset) {
+                totalDrawCalls++;
+                totalPrimitives += estimatePrimitives(this, mode, count);
+                return rawDrawElements.apply(this, arguments);
+            };
+        }
+
+        if (rawBindTexture) {
+            proto.bindTexture = function () {
+                totalTextureBinds++;
+                return rawBindTexture.apply(this, arguments);
+            };
+        }
+    }
+
+    function hookWebGL() {
+        hookWebGLContext(window.WebGLRenderingContext);
+        hookWebGLContext(window.WebGL2RenderingContext);
+    }
+
+    function sampleRenderStats(nowReal) {
+        if (!renderLastReal) {
+            renderLastReal = nowReal;
+            renderLastDrawCalls = totalDrawCalls;
+            renderLastPrimitives = totalPrimitives;
+            renderLastTextureBinds = totalTextureBinds;
+            return;
+        }
+
+        var elapsed = nowReal - renderLastReal;
+        if (elapsed < 1000) return;
+
+        renderDrawPerSec = (totalDrawCalls - renderLastDrawCalls) * 1000 / elapsed;
+        renderPrimPerSec = (totalPrimitives - renderLastPrimitives) * 1000 / elapsed;
+        renderBindPerSec = (totalTextureBinds - renderLastTextureBinds) * 1000 / elapsed;
+
+        renderLastReal = nowReal;
+        renderLastDrawCalls = totalDrawCalls;
+        renderLastPrimitives = totalPrimitives;
+        renderLastTextureBinds = totalTextureBinds;
+    }
+
+    function startLagProbe() {
+        lagLastReal = realNow();
+        rawSetInterval(function () {
+            var now = realNow();
+            var lag = Math.max(0, now - lagLastReal - 100);
+            lagAvg = lagAvg ? lagAvg * 0.9 + lag * 0.1 : lag;
+            if (lag > lagMax) lagMax = lag;
+            lagLastReal = now;
+        }, 100);
     }
 
     function getNumber(obj, key) {
@@ -118,6 +217,7 @@ if (window.self === window.top) return;
         var realElapsed = Math.max(1, nowReal - baseReal);
         var dateElapsed = Date.now() - baseDate;
         var perfElapsed = perfNow() - basePerf;
+        sampleRenderStats(nowReal);
 
         var timer = getLayaTimer();
         var layaTimer = getNumber(timer, "currTimer");
@@ -143,6 +243,12 @@ if (window.self === window.top) return;
         html += line("Laya currTimer", formatMs(layaTimerElapsed) + " / " + formatRate(layaTimerElapsed == null ? null : layaTimerElapsed / realElapsed));
         html += line("Laya currFrame", formatNum(layaFrameElapsed) + " / " + formatRate(layaFramePerSec == null ? null : layaFramePerSec));
         html += line("Laya delta", layaDelta == null ? "-" : layaDelta.toFixed(2) + "ms");
+        html += "<div style='height:1px;background:rgba(255,255,255,0.16);margin:8px 0;'></div>";
+        html += line("WebGL draws/s", renderDrawPerSec ? renderDrawPerSec.toFixed(0) : "-", "每秒 drawArrays/drawElements 次数，越高渲染压力越大");
+        html += line("draws/frame", renderDrawPerSec && fps ? (renderDrawPerSec / fps).toFixed(1) : "-", "平均每帧 draw call 数");
+        html += line("prims/s", renderPrimPerSec ? Math.round(renderPrimPerSec / 1000) + "k" : "-", "粗略估算的图元数量");
+        html += line("bindTex/s", renderBindPerSec ? renderBindPerSec.toFixed(0) : "-", "纹理切换次数，过高可能说明批处理较差");
+        html += line("loop lag", lagAvg.toFixed(1) + " / " + lagMax.toFixed(1) + "ms", "事件循环平均/最大延迟，偏高说明 JS 主线程忙");
 
         content.innerHTML = html;
     }
@@ -213,9 +319,11 @@ if (window.self === window.top) return;
 
     function init() {
         createNativeClock();
+        hookWebGL();
         initBaselines();
         createPanel();
         raf && raf(rafLoop);
+        startLagProbe();
         rawSetInterval(updatePanel, 500);
         updatePanel();
     }
