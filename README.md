@@ -16,6 +16,8 @@
 | --- | --- | --- | --- |
 | [`xjjd-auto-click-recorder.user.js`](scripts/xjjd-auto-click-recorder.user.js) | 2.1 | 自动点击录制器，支持录制、补充录制、循环回放、点位显示/编辑、导入导出 | 常用 |
 | [`xjjd-ancient-ruins-bot.user.js`](scripts/xjjd-ancient-ruins-bot.user.js) | 4.3 | 小鸡舰队出击古代遗迹自动化，基于 Laya 场景节点识别 | 常用 |
+| [`xjjd-admin-tools-toggle.user.js`](scripts/xjjd-admin-tools-toggle.user.js) | 1.0 | 扫描并开关 Laya 场景中疑似隐藏的管理/调试工具节点 | 实验 |
+| [`xjjd-gm-tools-toggle.user.js`](scripts/xjjd-gm-tools-toggle.user.js) | 1.1 | 右上角小方块开关，显示/隐藏战斗场景内置 `btn_gm` 按钮 | 实验 |
 | [`xjjd-jiasuqu-v4-debug.js`](scripts/xjjd-jiasuqu-v4-debug.js) | 4.0-debug | 变速调试面板，统计真实时间、页面时间、rAF FPS 和 Laya timer 数据 | 调试 |
 | [`xjjd-jiasuqu-v3.js`](scripts/xjjd-jiasuqu-v3.js) | 3.0 | 变速实验版，通过 `Laya.timer.scale` 调整 Laya 引擎速度 | 实验 |
 | [`xjjd-jiasuqu-v2.js`](scripts/xjjd-jiasuqu-v2.js) | 2.4 | 变速稳定版，通过虚拟 `Date` / `performance.now()` 影响时间流速 | 推荐对照 |
@@ -44,8 +46,10 @@
 .
 ├── README.md
 └── scripts/
+    ├── xjjd-admin-tools-toggle.user.js
     ├── xjjd-ancient-ruins-bot.user.js
     ├── xjjd-auto-click-recorder.user.js
+    ├── xjjd-gm-tools-toggle.user.js
     ├── xjjd-jiasuqu.js
     ├── xjjd-jiasuqu-v2.js
     ├── xjjd-jiasuqu-v3.js
