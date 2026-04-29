@@ -16,6 +16,7 @@
 | --- | --- | --- | --- |
 | [`xjjd-auto-click-recorder.user.js`](scripts/xjjd-auto-click-recorder.user.js) | 2.1 | 自动点击录制器，支持录制、补充录制、循环回放、点位显示/编辑、导入导出 | 常用 |
 | [`xjjd-ancient-ruins-bot.user.js`](scripts/xjjd-ancient-ruins-bot.user.js) | 4.3 | 小鸡舰队出击古代遗迹自动化，基于 Laya 场景节点识别 | 常用 |
+| [`xjjd-jiasuqu-v4-debug.js`](scripts/xjjd-jiasuqu-v4-debug.js) | 4.0-debug | 变速调试面板，统计真实时间、页面时间、rAF FPS 和 Laya timer 数据 | 调试 |
 | [`xjjd-jiasuqu-v3.js`](scripts/xjjd-jiasuqu-v3.js) | 3.0 | 变速实验版，通过 `Laya.timer.scale` 调整 Laya 引擎速度 | 实验 |
 | [`xjjd-jiasuqu-v2.js`](scripts/xjjd-jiasuqu-v2.js) | 2.4 | 变速稳定版，通过虚拟 `Date` / `performance.now()` 影响时间流速 | 推荐对照 |
 | [`xjjd-jiasuqu.js`](scripts/xjjd-jiasuqu.js) | 2.2 | 旧版变速脚本，重写 timer / rAF 并自行调度 | 归档 |
@@ -27,6 +28,8 @@
 如果 v3 只让部分动画变快，但倒计时、结算或战斗流程没有同步变化，再使用 `xjjd-jiasuqu-v2.js` 对照。v2 通过虚拟时间影响更多计时路径，兼容面更大，但对页面全局时间 API 的影响也更明显。
 
 `xjjd-jiasuqu.js` 是旧版实现，保留用于回溯和对比，不建议优先使用。
+
+需要分析加速效果时，可以临时启用 `xjjd-jiasuqu-v4-debug.js`。它不会主动加速，只显示真实时间、页面 `Date`、`performance.now()`、rAF FPS、`Laya.timer.currTimer`、`Laya.timer.currFrame` 等数据，方便判断当前脚本到底影响了哪些计时路径。
 
 ## 使用提示
 
@@ -45,7 +48,8 @@
     ├── xjjd-auto-click-recorder.user.js
     ├── xjjd-jiasuqu.js
     ├── xjjd-jiasuqu-v2.js
-    └── xjjd-jiasuqu-v3.js
+    ├── xjjd-jiasuqu-v3.js
+    └── xjjd-jiasuqu-v4-debug.js
 ```
 
 ## 维护约定
