@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         古代遗迹自动挂机
 // @namespace    http://tampermonkey.net/
-// @version      4.3
-// @description  小鸡舰队出击 - 古代遗迹自动化（基于 Laya 引擎）
+// @version      4.5
+// @description  小鸡舰队出击 - 古代遗迹/天空迷城/流派自动化（基于 Laya 引擎）
 // @author       xyk
 // @match        https://www.wanyiwan.top/*
 // @grant        none
@@ -68,6 +68,40 @@
     }
 
     function hasNode(name) { return !!findNode(name); }
+
+    function hasText(pattern) {
+        if (!layaReady) return false;
+        var found = false;
+        walk(Laya.stage, function(node) {
+            if (found || !isVisible(node)) return;
+            var text = getText(node);
+            if (text && pattern.test(text)) found = true;
+        });
+        return found;
+    }
+
+    function findTextNode(pattern) {
+        if (!layaReady) return null;
+        var best = null, bestDepth = Infinity;
+        walk(Laya.stage, function(node, depth) {
+            if (best || !isVisible(node)) return;
+            var text = getText(node);
+            if (text && pattern.test(text) && depth < bestDepth) {
+                best = node;
+                bestDepth = depth;
+            }
+        });
+        return best;
+    }
+
+    function clickText(pattern) {
+        var node = findTextNode(pattern);
+        if (!node) return false;
+        clickNode(node);
+        var pt = getGlobalCenter(node);
+        log('点击文案 [' + getText(node) + '] @(' + Math.round(pt.x) + ',' + Math.round(pt.y) + ')');
+        return true;
+    }
 
     /** 难度列表当前焦点（0=难度1），优先 FairyGUI selectedIndex，否则扫「难度N」文案 */
     function getLevelListCurrentIndex(listName) {
@@ -324,12 +358,27 @@
         EVENT_RESULT:   '事件结果',
         ARTIFACT_EQUIP: '神器装备',
         PLOT_EVENT:     '剧情事件',
+        SKY_LOBBY:      '天空迷城大厅',
+        SKY_FIGHT:      '天空迷城战斗',
+        SKY_SUCCESS:    '天空迷城胜利',
+        SKY_FAIL:       '天空迷城失败',
+        SCHOOL_LOBBY:   '流派大厅',
+        SCHOOL_CONFIRM: '流派确认',
+        SCHOOL_CAPTAIN: '流派选队长',
+        SCHOOL_VICTORY: '流派胜利',
+        SCHOOL_FAIL:    '流派失败',
     };
 
     var currentStep = STEPS.IDLE;
     var isRunning = false;
     var timer = null;
     var sweepMode = false;
+    var MODES = {
+        RUINS: '遗迹',
+        SKY:   '迷城',
+        SCHOOL: '流派',
+    };
+    var currentMode = MODES.RUINS;
 
     function log(msg) {
         console.error('[遗迹Bot]', msg);
@@ -337,6 +386,29 @@
 
     function detectStep() {
         if (!layaReady && !checkLaya()) return STEPS.IDLE;
+
+        if (currentMode === MODES.SKY) {
+            if (hasNode('btn_next') && hasNode('list_reward') && hasNode('btn_ok') && hasNode('txt_level')) return STEPS.SKY_SUCCESS;
+            if (hasNode('base') && hasNode('list_btn') && hasText(/挑战失败/)) return STEPS.SKY_FAIL;
+            if (hasNode('btn_finish') && hasNode('player_me') && hasNode('player_other')) return STEPS.SKY_FIGHT;
+            if (hasNode('btn_fight') && hasNode('itemShipPanle') && hasNode('list_pass_reward')) return STEPS.SKY_LOBBY;
+            return STEPS.IDLE;
+        }
+
+        if (currentMode === MODES.SCHOOL) {
+            if (hasNode('panelBaseWin') && hasNode('btn_ok') && hasNode('list_reward') &&
+                (hasNode('txt_diff') || hasNode('itemMonsterDead'))) return STEPS.SCHOOL_VICTORY;
+            if (hasNode('panelBaseFail') && hasNode('btn_ok') &&
+                (hasNode('txt_diff') || hasNode('itemMonsterDead'))) return STEPS.SCHOOL_FAIL;
+            if (hasNode('btn_ensure') && hasNode('btn_cancel') && hasText(/祝福加成未达最大/)) return STEPS.SCHOOL_CONFIRM;
+            if (hasNode('list_captain') && hasNode('txt_captain_tip')) return STEPS.SCHOOL_CAPTAIN;
+            if (hasNode('btn_begin_challenge') &&
+                hasNode('item_sociaty_war_chapter') &&
+                hasNode('item_sociaty_war_equip') &&
+                hasNode('item_sociaty_war_bless')) return STEPS.SCHOOL_LOBBY;
+            return STEPS.IDLE;
+        }
+
         if (hasNode('btn_ensure') && hasNode('btn_cancel')) return STEPS.CONFIRM;
         if (hasNode('btn_confirm')) return STEPS.EVENT_RESULT;
         if (hasNode('item_new') && (hasNode('btn_replace') || hasNode('btn_delete'))) return STEPS.ARTIFACT_EQUIP;
@@ -398,6 +470,20 @@
                 break;
             case STEPS.MAP: clickMapNode(); break;
             case STEPS.BATTLE_CONFIRM: clickByName('btn_challenge'); break;
+            case STEPS.SKY_LOBBY: clickByName('btn_fight'); break;
+            case STEPS.SKY_FIGHT: clickByName('btn_finish'); break;
+            case STEPS.SKY_SUCCESS: clickByName('btn_next'); break;
+            case STEPS.SKY_FAIL:
+                log('天空迷城失败，点击失败弹窗关闭文案');
+                if (!clickText(/点击任意位置关闭/)) clickAt(640, 260);
+                break;
+            case STEPS.SCHOOL_LOBBY: clickByName('btn_begin_challenge'); break;
+            case STEPS.SCHOOL_CONFIRM: clickByName('btn_ensure'); break;
+            case STEPS.SCHOOL_CAPTAIN:
+                if (!clickText(/^战士$/)) clickListItem('list_captain', -1);
+                break;
+            case STEPS.SCHOOL_VICTORY: clickByName('btn_ok'); break;
+            case STEPS.SCHOOL_FAIL: clickByName('btn_ok'); break;
             case STEPS.CAPTAIN_SELECT: clickListItem('list_captain', -1); break;
             case STEPS.UPGRADE: clickListItem('list_public', -1); break;
             case STEPS.VICTORY: clickByName('btn_ok'); break;
@@ -418,17 +504,30 @@
         }
     }
 
-    function start() {
+    function setLayaSpeed(scale) {
+        try {
+            if (typeof Laya === 'undefined' || !Laya.timer) return;
+            Laya.timer.scale = scale;
+            if (Laya.physicsTimer) Laya.physicsTimer.scale = scale;
+            log('Laya 倍速: ' + scale + 'x');
+        } catch (_) {}
+    }
+
+    function start(mode) {
+        currentMode = mode || currentMode;
+        currentStep = STEPS.IDLE;
         if (isRunning) return;
         isRunning = true;
-        log('▶ 启动');
+        if (currentMode === MODES.SKY) setLayaSpeed(5);
+        log('▶ 启动: ' + currentMode);
         timer = setInterval(act, 1000);
     }
 
     function stop() {
+        if (currentMode === MODES.SKY) setLayaSpeed(1);
         isRunning = false;
         if (timer) { clearInterval(timer); timer = null; }
-        log('⏸ 停止');
+        log('⏸ 停止: ' + currentMode);
     }
 
     // ==================== 场景树 Dump ====================
@@ -487,8 +586,10 @@
             '<div id="rb-bar" style="display:flex;gap:0.8vw;padding:0.8vw 1.3vw;background:rgba(15,15,25,0.9);border-radius:1vw;cursor:move;box-shadow:0 2px 10px rgba(0,0,0,0.5);align-items:center;">' +
             '<span id="rb-toggle" style="cursor:pointer;font-size:2vw;line-height:1;">🏛️</span>' +
             '<span id="rb-btns" style="display:none;">' +
-            '<button id="rb-go" style="padding:0.7vw 1.3vw;background:#43A047;color:#fff;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;font-weight:bold;">自动</button> ' +
+            '<button id="rb-ruins" style="padding:0.7vw 1.3vw;background:#43A047;color:#fff;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;font-weight:bold;">遗迹</button> ' +
             '<button id="rb-sweep" style="padding:0.7vw 1.3vw;background:#555;color:#aaa;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;">难度1</button> ' +
+            '<button id="rb-sky" style="margin-left:0.8vw;padding:0.7vw 1.3vw;background:#1976D2;color:#fff;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;font-weight:bold;">迷城</button> ' +
+            '<button id="rb-school" style="padding:0.7vw 1.3vw;background:#7B1FA2;color:#fff;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;font-weight:bold;">流派</button> ' +
             '<button id="rb-debug" style="padding:0.7vw 1.3vw;background:#37474F;color:#ddd;border:none;border-radius:0.7vw;cursor:pointer;font-size:1.6vw;">debug</button>' +
             '</span></div>';
 
@@ -499,10 +600,34 @@
             btns.style.display = btns.style.display === 'none' ? 'inline' : 'none';
         };
 
-        var goBtn = panel.querySelector('#rb-go');
-        goBtn.onclick = function() {
-            if (isRunning) { stop(); goBtn.textContent = '自动'; goBtn.style.background = '#43A047'; }
-            else { start(); goBtn.textContent = '停止'; goBtn.style.background = '#E53935'; }
+        var ruinsBtn = panel.querySelector('#rb-ruins');
+        var skyBtn = panel.querySelector('#rb-sky');
+        var schoolBtn = panel.querySelector('#rb-school');
+        function refreshRunButtons() {
+            ruinsBtn.textContent = isRunning && currentMode === MODES.RUINS ? '停止' : '遗迹';
+            skyBtn.textContent = isRunning && currentMode === MODES.SKY ? '停止' : '迷城';
+            schoolBtn.textContent = isRunning && currentMode === MODES.SCHOOL ? '停止' : '流派';
+            ruinsBtn.style.background = isRunning && currentMode === MODES.RUINS ? '#E53935' : '#43A047';
+            skyBtn.style.background = isRunning && currentMode === MODES.SKY ? '#E53935' : '#1976D2';
+            schoolBtn.style.background = isRunning && currentMode === MODES.SCHOOL ? '#E53935' : '#7B1FA2';
+        }
+        function toggleMode(mode) {
+            if (isRunning && currentMode === mode) {
+                stop();
+            } else {
+                if (isRunning) stop();
+                start(mode);
+            }
+            refreshRunButtons();
+        }
+        ruinsBtn.onclick = function() {
+            toggleMode(MODES.RUINS);
+        };
+        skyBtn.onclick = function() {
+            toggleMode(MODES.SKY);
+        };
+        schoolBtn.onclick = function() {
+            toggleMode(MODES.SCHOOL);
         };
 
         var sweepBtn = panel.querySelector('#rb-sweep');
